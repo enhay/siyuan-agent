@@ -19,8 +19,18 @@ import {
 import type { SettingsSection, SettingsDraft } from "./chat-helpers";
 import { escapeHtml } from "./chat-helpers";
 import { defaultTranslator, type Translator } from "../i18n";
+import { normalizeSessionSyncConfig } from "../core/session-sync/config";
+import { decideTier, detectEnvironment } from "../core/session-sync/env-probe";
 
 const CONFIG_STORAGE = "agent-config";
+
+/** Split a textarea value into trimmed, non-empty lines (one path per line). */
+function parseLines(value: FormDataEntryValue | null): string[] {
+	return String(value || "")
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean);
+}
 
 /* ── Host interface ──────────────────────────────────────────────────── */
 
@@ -86,6 +96,7 @@ export class SettingsView {
 			subAgentModelId: config.subAgentModelId || "",
 			mcpServers: Array.isArray(config.mcpServers) ? config.mcpServers.map((item) => ({ ...item })) : [],
 			notebookOptions,
+			sessionSync: normalizeSessionSyncConfig(detectEnvironment(), config.sessionSync),
 		};
 		this.draft = draft;
 
@@ -121,6 +132,7 @@ export class SettingsView {
 			{ id: "default-models", label: this.t("settings.nav.defaultModels") },
 			{ id: "mcp", label: this.t("settings.nav.mcp") },
 			{ id: "tracing", label: this.t("settings.nav.tracing") },
+			{ id: "session-sync", label: this.t("settings.nav.sessionSync") },
 		];
 		const modelServicesHtml = this.renderModelServices(draft.modelServices);
 		const mcpServersHtml = this.renderMcpServers(draft.mcpServers);
@@ -227,6 +239,54 @@ export class SettingsView {
 						<input class="b3-text-field" name="langSmithProject" value="${escapeHtml(draft.langSmithProject)}" placeholder="SiYuan-Agent" />
 					</label>
 				</section>
+				<section class="settings-panel__section${this.currentSection === "session-sync" ? " settings-panel__section--active" : ""}" data-settings-panel="session-sync">
+					<div class="settings-panel__section-title">${escapeHtml(this.t("settings.sessionSync.title"))}</div>
+					${decideTier(detectEnvironment()) !== "in-plugin" ? `<div style="opacity:.7;font-size:12px;margin:0 0 8px">${escapeHtml(this.t("settings.sessionSync.tierNote"))}</div>` : ""}
+					<label class="settings-panel__checkbox">
+						<input type="checkbox" name="ss_enabled"${draft.sessionSync.enabled ? " checked" : ""} />
+						<span>${escapeHtml(this.t("settings.sessionSync.enable"))}</span>
+					</label>
+					<label class="settings-panel__field">
+						<span>${escapeHtml(this.t("settings.sessionSync.notebook"))}</span>
+						<select class="b3-select" name="ss_notebookId">
+							<option value="">${escapeHtml(this.t("settings.sessionSync.notebookNone"))}</option>
+							${draft.notebookOptions.map((o) => `<option value="${escapeHtml(o.id)}"${o.id === draft.sessionSync.notebookId ? " selected" : ""}>${escapeHtml(o.name)}</option>`).join("")}
+						</select>
+					</label>
+					<label class="settings-panel__field">
+						<span>${escapeHtml(this.t("settings.sessionSync.rootPath"))}</span>
+						<input class="b3-text-field" name="ss_rootPath" value="${escapeHtml(draft.sessionSync.rootPath)}" placeholder="/AI 会话" />
+					</label>
+					<label class="settings-panel__checkbox">
+						<input type="checkbox" name="ss_codex"${draft.sessionSync.sources.codex ? " checked" : ""} />
+						<span>Codex CLI</span>
+					</label>
+					<label class="settings-panel__field">
+						<span>${escapeHtml(this.t("settings.sessionSync.codexPaths"))}</span>
+						<textarea class="b3-text-field" name="ss_codexPaths" rows="2" placeholder="~/.codex/sessions">${escapeHtml(draft.sessionSync.sourcePaths.codex.join("\n"))}</textarea>
+					</label>
+					<label class="settings-panel__checkbox">
+						<input type="checkbox" name="ss_claude"${draft.sessionSync.sources.claude ? " checked" : ""} />
+						<span>Claude Code</span>
+					</label>
+					<label class="settings-panel__field">
+						<span>${escapeHtml(this.t("settings.sessionSync.claudePaths"))}</span>
+						<textarea class="b3-text-field" name="ss_claudePaths" rows="2" placeholder="~/.claude/projects">${escapeHtml(draft.sessionSync.sourcePaths.claude.join("\n"))}</textarea>
+					</label>
+					<label class="settings-panel__field">
+						<span>${escapeHtml(this.t("settings.sessionSync.interval"))}</span>
+						<input class="b3-text-field" type="number" min="15" name="ss_pollIntervalSec" value="${draft.sessionSync.pollIntervalSec}" />
+					</label>
+					<label class="settings-panel__field">
+						<span>${escapeHtml(this.t("settings.sessionSync.backfillDays"))}</span>
+						<input class="b3-text-field" type="number" min="1" name="ss_backfillDays" value="${draft.sessionSync.backfillDays}" />
+					</label>
+					<label class="settings-panel__field">
+						<span>${escapeHtml(this.t("settings.sessionSync.backfillLimit"))}</span>
+						<input class="b3-text-field" type="number" min="1" name="ss_backfillLimit" value="${draft.sessionSync.backfillLimit}" />
+					</label>
+					<div style="opacity:.7;font-size:12px;margin-top:8px">${draft.sessionSync.lastSyncAt ? escapeHtml(this.t("settings.sessionSync.lastSync", { time: new Date(draft.sessionSync.lastSyncAt).toLocaleString() })) : escapeHtml(this.t("settings.sessionSync.never"))}</div>
+				</section>
 			</div>
 		</div>
 	</form>
@@ -305,6 +365,21 @@ export class SettingsView {
 			langSmithApiKey: String(formData.get("langSmithApiKey") || "").trim(),
 			langSmithEndpoint: String(formData.get("langSmithEndpoint") || "").trim() || DEFAULT_CONFIG.langSmithEndpoint,
 			langSmithProject: String(formData.get("langSmithProject") || "").trim() || DEFAULT_CONFIG.langSmithProject,
+			sessionSync: {
+				enabled: formData.get("ss_enabled") === "on",
+				sources: { codex: formData.get("ss_codex") === "on", claude: formData.get("ss_claude") === "on" },
+				sourcePaths: {
+					codex: parseLines(formData.get("ss_codexPaths")),
+					claude: parseLines(formData.get("ss_claudePaths")),
+				},
+				notebookId: String(formData.get("ss_notebookId") || "").trim() || undefined,
+				rootPath: String(formData.get("ss_rootPath") || "").trim() || "/AI 会话",
+				pollIntervalSec: Number(formData.get("ss_pollIntervalSec")) || 60,
+				backfillDays: Number(formData.get("ss_backfillDays")) || 7,
+				backfillLimit: Number(formData.get("ss_backfillLimit")) || 50,
+				aiTitle: draft.sessionSync.aiTitle,
+				lastSyncAt: draft.sessionSync.lastSyncAt,
+			},
 		};
 		this.ctx.plugin.data[CONFIG_STORAGE] = nextConfig;
 		await this.ctx.plugin.saveData(CONFIG_STORAGE, nextConfig);
@@ -323,6 +398,7 @@ export class SettingsView {
 			subAgentModelId: nextConfig.subAgentModelId || "",
 			mcpServers: (nextConfig.mcpServers || []).map((item) => ({ ...item })),
 			notebookOptions: draft.notebookOptions,
+			sessionSync: normalizeSessionSyncConfig(detectEnvironment(), nextConfig.sessionSync),
 		};
 		await this.ctx.host.refreshModelSelector();
 		await this.render();

@@ -79,6 +79,9 @@ export interface AgentConfig {
 	subAgentModelId?: string;
 	/** MCP server configurations */
 	mcpServers?: McpServerConfig[];
+	/** AI session-log sync settings (codex/claude → SiYuan docs). Stored partial;
+	 *  normalized against the detected environment at read time. */
+	sessionSync?: Partial<import("../core/session-sync/config").SessionSyncConfig>;
 }
 
 /* ── Default config ──────────────────────────────────────────────────── */

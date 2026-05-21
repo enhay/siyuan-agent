@@ -15,6 +15,10 @@ import { ChatPanel } from "./ui/chat-panel";
 import { getDefaultTools, type DefaultToolsOptions } from "./core/tools";
 import { SessionStore, createPluginStorage } from "./core/session-store";
 import { ScheduledTaskManager } from "./core/scheduled-task-manager";
+import { SessionSyncManager } from "./core/session-sync/manager";
+import { buildSyncRunner } from "./core/session-sync/runner";
+import { normalizeSessionSyncConfig, type SessionSyncConfig } from "./core/session-sync/config";
+import { detectEnvironment } from "./core/session-sync/env-probe";
 import { McpManager } from "./core/mcp-client";
 import { createTranslator, type Translator } from "./i18n";
 
@@ -32,6 +36,7 @@ export default class SiYuanAgent extends Plugin {
 	private pendingView: "settings" | null = null;
 	private sessionStore: SessionStore;
 	private scheduledTaskManager: ScheduledTaskManager;
+	private sessionSyncManager: SessionSyncManager;
 	private mcpManager: McpManager = new McpManager();
 	private translator: Translator;
 
@@ -57,6 +62,16 @@ export default class SiYuanAgent extends Plugin {
 			getConfig: () => this.getConfig(),
 			getTools: () => buildTools(),
 			i18n: this.translator,
+		});
+		this.sessionSyncManager = new SessionSyncManager({
+			getConfig: () => this.getSessionSyncConfig(),
+			getRunner: () => buildSyncRunner(this.getSessionSyncConfig(), this),
+			onSynced: async () => {
+				const cfg = this.getConfig();
+				const nextSync = { ...(cfg.sessionSync ?? {}), lastSyncAt: Date.now() };
+				this.data[CONFIG_STORAGE] = { ...cfg, sessionSync: nextSync };
+				await this.saveData(CONFIG_STORAGE, this.data[CONFIG_STORAGE]);
+			},
 		});
 
 		this.addIcons(`<symbol id="iconAgent" viewBox="0 0 24 24">
@@ -168,10 +183,16 @@ export default class SiYuanAgent extends Plugin {
 					showMessage(this.translator.t("noSelection"));
 			},
 		});
+
+		this.addCommand({
+			langKey: "syncSessionsNow",
+			hotkey: "",
+			callback: () => void this.runSessionSyncNow(),
+		});
 	}
 
 	onLayoutReady() {
-		void this.loadData(CONFIG_STORAGE);
+		void this.loadData(CONFIG_STORAGE).then(() => this.sessionSyncManager.start());
 		void this.scheduledTaskManager.start();
 		const topBarButton = this.addTopBar({
 			icon: "iconAgent",
@@ -214,8 +235,29 @@ export default class SiYuanAgent extends Plugin {
 
 	onunload() {
 		this.scheduledTaskManager?.stop();
+		this.sessionSyncManager?.stop();
 		this.chatPanel?.destroy();
 		void this.mcpManager.disconnectAll();
+	}
+
+	private getSessionSyncConfig(): SessionSyncConfig {
+		return normalizeSessionSyncConfig(detectEnvironment(), this.getConfig().sessionSync);
+	}
+
+	private async runSessionSyncNow(): Promise<void> {
+		showMessage(this.translator.t("sessionSync.syncing"));
+		const result = await this.sessionSyncManager.syncNow();
+		if (!result) {
+			showMessage(this.translator.t("sessionSync.unavailable"), 6000, "error");
+			return;
+		}
+		if (result.errors.length > 0) {
+			showMessage(this.translator.t("sessionSync.failed", { error: result.errors[0] }), 8000, "error");
+			return;
+		}
+		showMessage(
+			this.translator.t("sessionSync.done", { created: result.newSessions, updated: result.updatedSessions }),
+		);
 	}
 
 	uninstall() {
