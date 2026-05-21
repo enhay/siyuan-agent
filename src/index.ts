@@ -22,6 +22,7 @@ import { normalizeSessionSyncConfig, type SessionSyncConfig } from "./core/sessi
 import { detectEnvironment, decideTier } from "./core/session-sync/env-probe";
 import { createTitleProvider } from "./core/session-sync/adapters/title-provider";
 import { createFsSource } from "./core/session-sync/adapters/fs-source";
+import { getNodeRequire } from "./core/session-sync/node-require";
 import type { SyncRunner } from "./core/session-sync/manager";
 import { createChatModel } from "./core/chat-model";
 import { McpManager } from "./core/mcp-client";
@@ -273,8 +274,27 @@ export default class SiYuanAgent extends Plugin {
 		const result = await this.sessionSyncManager.syncNow();
 		if (!result) {
 			const diag = this.sessionSyncDiagnostic();
-			console.error("[session-sync] syncNow unavailable:", diag);
-			showMessage(`${this.translator.t("sessionSync.unavailable")} [${diag}]`, 12000, "error");
+			const status = this.sessionSyncManager.getStatus();
+			let reason: string;
+			if (status.running) {
+				reason = "busy (another sync in progress)";
+			} else if (status.lastError) {
+				reason = `reconcile error: ${status.lastError}`;
+			} else {
+				reason = "runner=null";
+				try {
+					const r = getNodeRequire();
+					if (!r) reason = "no native require";
+					else {
+						const fs = r("fs") as { promises?: unknown };
+						reason = fs?.promises ? "fs OK → check enabled/notebook" : "require('fs') has no .promises";
+					}
+				} catch (e) {
+					reason = `require('fs') threw: ${e instanceof Error ? e.message : String(e)}`;
+				}
+			}
+			console.error("[session-sync] not executed:", reason, diag);
+			showMessage(`同步未执行 / not run: ${reason} [${diag}]`, 14000, "error");
 			return;
 		}
 		if (result.errors.length > 0) {
