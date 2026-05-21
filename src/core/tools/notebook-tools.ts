@@ -1,4 +1,4 @@
-import { tool, ToolRuntime } from "@langchain/core/tools";
+import { defineTool } from "./define-tool";
 import { z } from "zod";
 import { siyuanFetch, emitActivity } from "./siyuan-api";
 import { kernel } from "./siyuan-kernel";
@@ -7,8 +7,8 @@ import { recentDocumentsViaApi } from "../recent-documents";
 import { defaultTranslator, type Translator } from "../../i18n";
 
 export function createListNotebooksTool(i18n: Translator = defaultTranslator) {
-return tool(
-	async (_, runtime: ToolRuntime) => {
+return defineTool(
+	async (_, ctx) => {
 		const data = await kernel.notebooks.list();
 		const notebooks = (data.notebooks || []).map((nb: any) => ({
 			id: nb.id,
@@ -16,7 +16,7 @@ return tool(
 			icon: nb.icon,
 			closed: nb.closed,
 		}));
-		emitActivity(runtime, {
+		emitActivity(ctx, {
 			category: "lookup",
 			action: "list",
 			label: i18n.t("tool.listNotebooks.label"),
@@ -33,8 +33,8 @@ return tool(
 }
 
 export function createListDocumentsTool(i18n: Translator = defaultTranslator) {
-return tool(
-	async ({ notebook, path, depth, page, page_size, child_limit, include_summary }, runtime: ToolRuntime) => {
+return defineTool(
+	async ({ notebook, path, depth, page, page_size, child_limit, include_summary }, ctx) => {
 		const result = await listDocumentsViaApi({
 			notebook,
 			path,
@@ -44,7 +44,7 @@ return tool(
 			child_limit,
 			include_summary,
 		}, siyuanFetch);
-		emitActivity(runtime, {
+		emitActivity(ctx, {
 			category: "lookup",
 			action: "list",
 			path: result.path,
@@ -70,12 +70,12 @@ return tool(
 }
 
 export function createRecentDocumentsTool(i18n: Translator = defaultTranslator) {
-return tool(
-	async ({ limit }, runtime: ToolRuntime) => {
+return defineTool(
+	async ({ limit }, ctx) => {
 		const result = await recentDocumentsViaApi({
 			limit,
 		}, siyuanFetch);
-		emitActivity(runtime, {
+		emitActivity(ctx, {
 			category: "lookup",
 			action: "list",
 			label: i18n.t("tool.recentDocuments.label"),

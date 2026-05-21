@@ -23,22 +23,113 @@
 	color: var(--agent-text-muted, var(--b3-theme-on-surface));
 }
 
+/* Single-column automation flow: card list on top, detail/editor below. */
 .chat-panel__tasks-board {
-	display: grid;
-	grid-template-columns: minmax(140px, 200px) minmax(0, 1fr);
+	display: flex;
+	flex-direction: column;
 	flex: 1;
 	min-height: 0;
 }
 
 .chat-panel__tasks-list {
-	border-right: 1px solid var(--agent-border, var(--b3-border-color));
+	border-bottom: 1px solid var(--agent-border, var(--b3-border-color));
 	padding: 8px;
 	overflow-y: auto;
+	max-height: 45%;
+	flex-shrink: 0;
 }
 
 .chat-panel__tasks-detail {
 	padding: 10px 12px;
 	overflow-y: auto;
+	flex: 1;
+	min-height: 0;
+}
+
+/* Automation card (codex-style): status dot + title + schedule chip + time. */
+.automation-card {
+	display: flex;
+	align-items: flex-start;
+	gap: 9px;
+	width: 100%;
+	padding: 9px 10px;
+	margin-bottom: 5px;
+	text-align: left;
+	border: 1px solid var(--agent-border, var(--b3-border-color));
+	border-radius: 9px;
+	background: var(--agent-surface, var(--b3-theme-surface));
+	color: var(--agent-text, var(--b3-theme-on-surface));
+	cursor: pointer;
+	transition: border-color 0.15s ease, background-color 0.15s ease;
+
+	&:hover {
+		border-color: color-mix(in srgb, var(--agent-accent) 35%, var(--agent-border) 65%);
+	}
+
+	&--active {
+		border-color: color-mix(in srgb, var(--agent-accent) 55%, var(--agent-border) 45%);
+		background: var(--agent-accent-soft, var(--b3-theme-primary-lightest));
+	}
+
+	&--off {
+		opacity: 0.6;
+	}
+}
+
+.automation-card__dot {
+	flex-shrink: 0;
+	width: 8px;
+	height: 8px;
+	margin-top: 5px;
+	border-radius: 50%;
+	background: var(--agent-text-muted, var(--b3-theme-on-surface));
+
+	&--success { background: var(--b3-card-success-color, #3fb950); }
+	&--error { background: var(--b3-card-error-color, #f85149); }
+	&--running {
+		background: var(--agent-accent, var(--b3-theme-primary));
+		animation: automation-pulse 1.2s ease-in-out infinite;
+	}
+	&--idle { background: color-mix(in srgb, var(--agent-text-muted, var(--b3-theme-on-surface)) 55%, transparent); }
+	&--disabled { background: color-mix(in srgb, var(--agent-text-muted, var(--b3-theme-on-surface)) 35%, transparent); }
+}
+
+@keyframes automation-pulse {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.35; }
+}
+
+.automation-card__body {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	min-width: 0;
+	flex: 1;
+}
+
+.automation-card__title {
+	font-size: 13px;
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.automation-card__meta {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+	font-size: 11px;
+	color: var(--agent-text-muted, var(--b3-theme-on-surface));
+}
+
+.automation-card__chip {
+	padding: 1px 7px;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--agent-accent-soft, var(--b3-theme-primary-lightest)) 70%, var(--agent-surface, var(--b3-theme-surface)) 30%);
+	color: var(--agent-accent, var(--b3-theme-primary));
+	font-weight: 500;
 }
 
 .task-list-item {
@@ -294,6 +385,28 @@
 	gap: 6px;
 	font-size: 12px;
 	color: var(--agent-text-muted, var(--b3-theme-on-surface));
+}
+
+/* Prompt-first: the instruction textarea leads the editor. */
+.task-editor__prompt {
+	font-size: 13px;
+	line-height: 1.5;
+	resize: vertical;
+}
+
+.task-editor__schedule {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px 14px;
+	align-items: flex-end;
+	padding: 10px;
+	border: 1px solid var(--agent-border, var(--b3-border-color));
+	border-radius: 8px;
+}
+
+.task-editor__field--inline {
+	flex-direction: column;
+	min-width: 110px;
 }
 
 .task-editor__checkbox {

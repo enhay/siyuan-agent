@@ -43,6 +43,8 @@ SiYuan Agent — AI assistant plugin for the SiYuan note-taking app. LangChain a
 
 `delete_document` deletes a whole document subtree and is **not undoable in-app** (recovery only via SiYuan Data History). It is registered **interactive-chat only**, opted in via `getDefaultTools(..., { includeDeleteDocument: true })` (see `chat-panel.ts` / `index.ts` `getInteractiveTools`). The autonomous **scheduled-task** toolset omits it — no user is present to confirm a deletion. The system prompt classifies it as a high-impact op requiring confirmation before use.
 
+**Kernel API contracts** for every endpoint these tools wrap (`siyuan-kernel.ts`) — request/response shapes, behavioral gotchas (e.g. `removeDocByID` deletes the subtree, `createDocWithMd` won't overwrite, block edits invalidate IDs) — are curated in `docs/siyuan-kernel-api.md`. Read it before adding or changing a tool; it cites the official API.md and kernel source.
+
 ### UI (`src/ui/`)
 - **`chat-panel.ts`** (74KB): Main orchestrator, delegate pattern → `SettingsView`, `TasksView`, `Autocomplete`
 - **`settings-view.ts`** (39KB): Model service management, MCP config, guide doc, LangSmith tracing

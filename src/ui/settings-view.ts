@@ -1,7 +1,7 @@
 /**
  * Settings view delegate – extracted from ChatPanel for maintainability.
  */
-import { Plugin, showMessage } from "siyuan";
+import { Plugin, showMessage, confirm } from "siyuan";
 import {
 	AgentConfig,
 	DEEPSEEK_API_BASE_URL,
@@ -54,6 +54,7 @@ export class SettingsView {
 	private currentSection: SettingsSection = "general";
 	private draft: SettingsDraft | null = null;
 	private autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+	private savedTimer: ReturnType<typeof setTimeout> | null = null;
 	private i18n: Translator;
 	private editingModelServiceId: string | null = null;
 	private editingServiceModelTarget: { serviceId: string; modelId?: string } | null = null;
@@ -118,12 +119,15 @@ export class SettingsView {
 			{ id: "general", label: this.t("settings.nav.general") },
 			{ id: "model-services", label: this.t("settings.nav.modelServices") },
 			{ id: "default-models", label: this.t("settings.nav.defaultModels") },
+			{ id: "mcp", label: this.t("settings.nav.mcp") },
 			{ id: "tracing", label: this.t("settings.nav.tracing") },
 		];
 		const modelServicesHtml = this.renderModelServices(draft.modelServices);
+		const mcpServersHtml = this.renderMcpServers(draft.mcpServers);
 
 		this.ctx.settingsViewEl.innerHTML = `
 <div class="settings-panel">
+	<div class="settings-panel__savestatus" data-role="save-status" role="status" aria-live="polite"></div>
 	<form class="settings-panel__form">
 		<div class="settings-panel__shell">
 			<aside class="settings-panel__nav">
@@ -196,6 +200,14 @@ export class SettingsView {
 						</label>
 					</section>
 
+				<section class="settings-panel__section${this.currentSection === "mcp" ? " settings-panel__section--active" : ""}" data-settings-panel="mcp">
+						<div class="agent-model-section__header">
+							<div class="settings-panel__section-title">${escapeHtml(this.t("settings.mcp.title"))}</div>
+							<button class="b3-button b3-button--outline" type="button" data-action="add-mcp">${escapeHtml(this.t("settings.editor.addMcp"))}</button>
+						</div>
+						${mcpServersHtml}
+					</section>
+
 				<section class="settings-panel__section${this.currentSection === "tracing" ? " settings-panel__section--active" : ""}" data-settings-panel="tracing">
 					<div class="settings-panel__section-title">${escapeHtml(this.t("settings.tracing.title"))}</div>
 					<label class="settings-panel__checkbox">
@@ -260,6 +272,7 @@ export class SettingsView {
 		});
 		this.bindGuideDocPicker();
 		this.bindModelActions();
+		this.bindMcpActions();
 		this.ctx.settingsViewEl.querySelector<HTMLSelectElement>("select[name='defaultNotebookId']")?.addEventListener("change", (event) => {
 			this.syncDraftFromForm();
 			const value = (event.currentTarget as HTMLSelectElement).value;
@@ -312,7 +325,8 @@ export class SettingsView {
 			notebookOptions: draft.notebookOptions,
 		};
 		await this.ctx.host.refreshModelSelector();
-		void this.render();
+		await this.render();
+		this.flashSaved();
 	}
 
 	private saveCurrentForm(): void {
@@ -362,6 +376,38 @@ export class SettingsView {
 			? services.map((service) => this.renderModelService(service)).join("")
 			: `<div class="agent-model-list__empty">${escapeHtml(this.t("settings.modelServices.emptyServices"))}</div>`;
 		return `<div class="agent-model-list">${listHtml}${addServiceForm}</div>`;
+	}
+
+	private renderMcpServers(servers: McpServerConfig[]): string {
+		if (!servers.length) {
+			return `<div class="agent-model-list"><div class="agent-model-list__empty">${escapeHtml(this.t("settings.mcp.empty"))}</div></div>`;
+		}
+		const rows = servers.map((server) => {
+			const attrs = `data-mcp-id="${escapeHtml(server.id)}"`;
+			const status = server.enabled ? this.t("settings.mcp.statusEnabled") : this.t("settings.mcp.statusDisabled");
+			return `
+				<div class="agent-model-row${server.enabled ? "" : " agent-model-row--disabled"}">
+					<div class="agent-model-list__info">
+						<span class="agent-model-list__name">${escapeHtml(server.name)}</span>
+						<span class="agent-model-list__detail">${escapeHtml(server.url)} · ${escapeHtml(status)}</span>
+					</div>
+					<div class="agent-model-list__actions">
+						${this.renderIconAction("toggle-mcp", server.enabled ? "#iconEye" : "#iconEyeoff", this.t("settings.mcp.toggle"), attrs)}
+						${this.renderIconAction("edit-mcp", "#iconEdit", this.t("common.edit"), attrs)}
+						${this.renderIconAction("delete-mcp", "#iconTrashcan", this.t("common.delete"), attrs)}
+					</div>
+				</div>`;
+		}).join("");
+		return `<div class="agent-model-list">${rows}</div>`;
+	}
+
+	private flashSaved(): void {
+		const el = this.ctx.settingsViewEl.querySelector<HTMLElement>("[data-role='save-status']");
+		if (!el) return;
+		el.textContent = this.t("settings.saved");
+		el.classList.add("is-visible");
+		if (this.savedTimer) clearTimeout(this.savedTimer);
+		this.savedTimer = setTimeout(() => el.classList.remove("is-visible"), 1800);
 	}
 
 	private renderModelService(service: ModelServiceConfig): string {
@@ -547,13 +593,16 @@ export class SettingsView {
 				const serviceId = button.dataset.serviceId || "";
 				const service = this.draft.modelServices.find((item) => item.id === serviceId);
 				if (!service) return;
-				const removedModelIds = new Set(service.models.map((item) => item.id));
-				this.draft.modelServices = this.draft.modelServices.filter((item) => item.id !== serviceId);
-				if (removedModelIds.has(this.draft.defaultModelId)) this.draft.defaultModelId = "";
-				if (removedModelIds.has(this.draft.subAgentModelId)) this.draft.subAgentModelId = "";
-				if (this.editingModelServiceId === serviceId) this.editingModelServiceId = null;
-				if (this.editingServiceModelTarget?.serviceId === serviceId) this.editingServiceModelTarget = null;
-				this.saveCurrentForm();
+				confirm(this.t("settings.modelServices.deleteService"), this.t("settings.confirm.deleteService", { name: service.name }), () => {
+					if (!this.draft) return;
+					const removedModelIds = new Set(service.models.map((item) => item.id));
+					this.draft.modelServices = this.draft.modelServices.filter((item) => item.id !== serviceId);
+					if (removedModelIds.has(this.draft.defaultModelId)) this.draft.defaultModelId = "";
+					if (removedModelIds.has(this.draft.subAgentModelId)) this.draft.subAgentModelId = "";
+					if (this.editingModelServiceId === serviceId) this.editingModelServiceId = null;
+					if (this.editingServiceModelTarget?.serviceId === serviceId) this.editingServiceModelTarget = null;
+					this.saveCurrentForm();
+				});
 			});
 		});
 		this.ctx.settingsViewEl.querySelectorAll<HTMLElement>("[data-action='add-service-model']").forEach((button) => {
@@ -583,11 +632,15 @@ export class SettingsView {
 				const modelId = button.dataset.modelId || "";
 				const service = this.draft.modelServices.find((item) => item.id === serviceId);
 				if (!service) return;
-				service.models = service.models.filter((item) => item.id !== modelId);
-				if (this.draft.defaultModelId === modelId) this.draft.defaultModelId = "";
-				if (this.draft.subAgentModelId === modelId) this.draft.subAgentModelId = "";
-				if (this.editingServiceModelTarget?.modelId === modelId) this.editingServiceModelTarget = null;
-				this.saveCurrentForm();
+				const model = service.models.find((item) => item.id === modelId);
+				confirm(this.t("common.delete"), this.t("settings.confirm.deleteModel", { name: model?.name || modelId }), () => {
+					if (!this.draft) return;
+					service.models = service.models.filter((item) => item.id !== modelId);
+					if (this.draft.defaultModelId === modelId) this.draft.defaultModelId = "";
+					if (this.draft.subAgentModelId === modelId) this.draft.subAgentModelId = "";
+					if (this.editingServiceModelTarget?.modelId === modelId) this.editingServiceModelTarget = null;
+					this.saveCurrentForm();
+				});
 			});
 		});
 		this.ctx.settingsViewEl.querySelectorAll<HTMLSelectElement>(".agent-model-inline-form [data-field='providerType']").forEach((select) => {
@@ -720,15 +773,20 @@ export class SettingsView {
 				const server = this.draft.mcpServers.find((item) => item.id === button.dataset.mcpId);
 				if (!server) return;
 				server.enabled = !server.enabled;
-				void this.render();
+				this.saveCurrentForm();
 			});
 		});
 		this.ctx.settingsViewEl.querySelectorAll<HTMLElement>("[data-action='delete-mcp']").forEach((button) => {
 			button.addEventListener("click", () => {
 				if (!this.draft) return;
 				this.syncDraftFromForm();
-				this.draft.mcpServers = this.draft.mcpServers.filter((item) => item.id !== button.dataset.mcpId);
-				void this.render();
+				const server = this.draft.mcpServers.find((item) => item.id === button.dataset.mcpId);
+				if (!server) return;
+				confirm(this.t("common.delete"), this.t("settings.confirm.deleteMcp", { name: server.name }), () => {
+					if (!this.draft) return;
+					this.draft.mcpServers = this.draft.mcpServers.filter((item) => item.id !== server.id);
+					this.saveCurrentForm();
+				});
 			});
 		});
 	}
@@ -782,7 +840,7 @@ export class SettingsView {
 				this.draft.mcpServers.push(nextServer);
 			}
 			overlay.remove();
-			void this.render();
+			this.saveCurrentForm();
 		});
 		overlay.addEventListener("click", (event) => {
 			if (event.target === overlay) overlay.remove();

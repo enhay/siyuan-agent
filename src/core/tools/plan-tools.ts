@@ -1,4 +1,4 @@
-import { tool, ToolRuntime } from "@langchain/core/tools";
+import { defineTool } from "./define-tool";
 import { z } from "zod";
 import { emitToolEvent } from "./siyuan-api";
 import type { TodoList, TodoStatus } from "../../types";
@@ -7,11 +7,11 @@ import type { TodoList, TodoStatus } from "../../types";
  * `write_todos` tool — creates or replaces the agent's task execution plan.
  *
  * The tool emits a custom event `{ __tool_type: "write_todos", todos }` via
- * `runtime.writer`, which the stream runtime picks up to persist into
+ * `ctx.emit`, which the stream runtime picks up to persist into
  * `AgentState.todos` and the UI can render as a progress checklist.
  */
-export const writeTodosTool = tool(
-	async ({ goal, todos: items }, runtime: ToolRuntime) => {
+export const writeTodosTool = defineTool(
+	async ({ goal, todos: items }, ctx) => {
 		const now = Date.now();
 		const todoList: TodoList = {
 			goal,
@@ -23,7 +23,7 @@ export const writeTodosTool = tool(
 		};
 
 		// Emit structured event so stream-runtime can persist todos into AgentState
-		emitToolEvent(runtime, { __tool_type: "write_todos", todos: todoList });
+		emitToolEvent(ctx, { __tool_type: "write_todos", todos: todoList });
 
 		const completed = todoList.items.filter((i) => i.status === "completed").length;
 		const inProgress = todoList.items.filter((i) => i.status === "in_progress").length;

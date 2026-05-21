@@ -1,4 +1,4 @@
-import { StructuredToolInterface } from "@langchain/core/tools";
+import type { AgentTool } from "../agent-types";
 import { z } from "zod";
 import { createSubAgentTool } from "../sub-agent";
 import type { AgentConfig } from "../../types";
@@ -14,11 +14,11 @@ import { createScheduledTaskTools } from "./scheduled-tools";
 export { createDeleteDocumentTool } from "./edit-tools";
 export { siyuanFetch, emitToolEvent, emitActivity } from "./siyuan-api";
 
-export function getLookupTools(): StructuredToolInterface[] {
+export function getLookupTools(): AgentTool[] {
 	return createLookupTools(defaultTranslator);
 }
 
-function createLookupTools(i18n: Translator): StructuredToolInterface[] {
+function createLookupTools(i18n: Translator): AgentTool[] {
 	return [
 		createListNotebooksTool(i18n),
 		createListDocumentsTool(i18n),
@@ -35,7 +35,7 @@ function createLookupTools(i18n: Translator): StructuredToolInterface[] {
 function createExploreNotesTool(
 	getAgentConfig: () => AgentConfig | Promise<AgentConfig>,
 	i18n: Translator,
-): StructuredToolInterface {
+): AgentTool {
 	return createSubAgentTool({
 		name: "explore_notes",
 		description: i18n.t("tool.explore.description"),
@@ -63,9 +63,9 @@ export function getDefaultTools(
 	getTaskManager: () => ScheduledTaskManager | null = () => null,
 	i18n: Translator = defaultTranslator,
 	opts: DefaultToolsOptions = {},
-): StructuredToolInterface[] {
+): AgentTool[] {
 	const scheduledTaskTools = createScheduledTaskTools(getTaskManager, i18n);
-	const defaultTools: StructuredToolInterface[] = [
+	const defaultTools: AgentTool[] = [
 		createListNotebooksTool(i18n),
 		createListDocumentsTool(i18n),
 		createRecentDocumentsTool(i18n),

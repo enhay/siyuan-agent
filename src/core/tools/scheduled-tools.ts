@@ -1,4 +1,4 @@
-import { tool, ToolRuntime } from "@langchain/core/tools";
+import { defineTool } from "./define-tool";
 import { z } from "zod";
 import { emitActivity } from "./siyuan-api";
 import type { ScheduledTaskManager } from "../scheduled-task-manager";
@@ -16,8 +16,8 @@ export function createScheduledTaskTools(
 		return manager;
 	};
 
-	const createScheduledTaskTool = tool(
-		async ({ title, prompt, scheduleType, cron, triggerAt, timezone, enabled }, runtime: ToolRuntime) => {
+	const createScheduledTaskTool = defineTool(
+		async ({ title, prompt, scheduleType, cron, triggerAt, timezone, enabled }, ctx) => {
 			const session = await requireTaskManager().createTask({
 				title,
 				prompt,
@@ -27,7 +27,7 @@ export function createScheduledTaskTools(
 				timezone,
 				enabled,
 			});
-			emitActivity(runtime, {
+			emitActivity(ctx, {
 				category: "change",
 				action: "create",
 				label: session.task?.title || title,
@@ -50,10 +50,10 @@ export function createScheduledTaskTools(
 		}
 	);
 
-	const listScheduledTasksTool = tool(
-		async (_, runtime: ToolRuntime) => {
+	const listScheduledTasksTool = defineTool(
+		async (_, ctx) => {
 			const tasks = requireTaskManager().listTaskEntries().map((entry) => entry.task);
-			emitActivity(runtime, {
+			emitActivity(ctx, {
 				category: "lookup",
 				action: "list",
 				label: i18n.t("tool.scheduled.label"),
@@ -68,8 +68,8 @@ export function createScheduledTaskTools(
 		}
 	);
 
-	const updateScheduledTaskTool = tool(
-		async ({ taskId, title, prompt, scheduleType, cron, triggerAt, timezone, enabled }, runtime: ToolRuntime) => {
+	const updateScheduledTaskTool = defineTool(
+		async ({ taskId, title, prompt, scheduleType, cron, triggerAt, timezone, enabled }, ctx) => {
 			const session = await requireTaskManager().updateTask(taskId, {
 				title,
 				prompt,
@@ -79,7 +79,7 @@ export function createScheduledTaskTools(
 				timezone,
 				enabled,
 			});
-			emitActivity(runtime, {
+			emitActivity(ctx, {
 				category: "change",
 				action: "edit",
 				label: session.task?.title || taskId,
@@ -103,10 +103,10 @@ export function createScheduledTaskTools(
 		}
 	);
 
-	const deleteScheduledTaskTool = tool(
-		async ({ taskId }, runtime: ToolRuntime) => {
+	const deleteScheduledTaskTool = defineTool(
+		async ({ taskId }, ctx) => {
 			await requireTaskManager().deleteTask(taskId);
-			emitActivity(runtime, {
+			emitActivity(ctx, {
 				category: "change",
 				action: "delete",
 				label: taskId,

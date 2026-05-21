@@ -1,4 +1,4 @@
-import { ToolRuntime } from "@langchain/core/tools";
+import type { ToolEmitContext } from "./define-tool";
 
 /** Call a SiYuan kernel API and return `resp.data` on success.
  *
@@ -18,15 +18,12 @@ export async function siyuanFetch(url: string, data: any): Promise<any> {
 	return json.data;
 }
 
-export function emitToolEvent(runtime: ToolRuntime, payload: Record<string, unknown>): void {
-	runtime.writer?.(JSON.stringify({
-		...payload,
-		toolCallId: runtime.toolCallId,
-	}));
+export function emitToolEvent(ctx: ToolEmitContext, payload: Record<string, unknown>): void {
+	ctx.emit(payload);
 }
 
 export function emitActivity(
-	runtime: ToolRuntime,
+	ctx: ToolEmitContext,
 	payload: {
 		category: "lookup" | "change" | "other";
 		action: "list" | "read" | "search" | "create" | "append" | "edit" | "move" | "rename" | "delete" | "other";
@@ -37,7 +34,7 @@ export function emitActivity(
 		open?: boolean;
 	},
 ): void {
-	emitToolEvent(runtime, {
+	emitToolEvent(ctx, {
 		__tool_type: "activity",
 		...payload,
 	});

@@ -1,12 +1,12 @@
-import { tool, ToolRuntime } from "@langchain/core/tools";
+import { defineTool } from "./define-tool";
 import { z } from "zod";
 import { emitActivity } from "./siyuan-api";
 import { kernel, sqlValue } from "./siyuan-kernel";
 import { defaultTranslator, type Translator } from "../../i18n";
 
 export function createGetDocumentTool(i18n: Translator = defaultTranslator) {
-return tool(
-	async ({ id }, runtime: ToolRuntime) => {
+return defineTool(
+	async ({ id }, ctx) => {
 		const docInfo = await kernel.sql(
 			`SELECT id, content, hpath FROM blocks WHERE id=${sqlValue(id)} LIMIT 1`,
 		);
@@ -14,7 +14,7 @@ return tool(
 		const hpath = data.hPath || "";
 		const content = data.content || "";
 		const label = docInfo?.[0]?.content || hpath || id;
-		emitActivity(runtime, {
+		emitActivity(ctx, {
 			category: "lookup",
 			action: "read",
 			id,
@@ -36,8 +36,8 @@ return tool(
 }
 
 export function createGetDocumentBlocksTool(i18n: Translator = defaultTranslator) {
-return tool(
-	async ({ id }, runtime: ToolRuntime) => {
+return defineTool(
+	async ({ id }, ctx) => {
 		const docInfo = await kernel.sql(
 			`SELECT id, hpath FROM blocks WHERE id=${sqlValue(id)} LIMIT 1`,
 		);
@@ -48,7 +48,7 @@ return tool(
 			subType: b.subType || undefined,
 			markdown: b.markdown || b.content || "",
 		}));
-		emitActivity(runtime, {
+		emitActivity(ctx, {
 			category: "lookup",
 			action: "read",
 			id,
@@ -70,8 +70,8 @@ return tool(
 }
 
 export function createGetDocumentOutlineTool(i18n: Translator = defaultTranslator) {
-return tool(
-	async ({ id }, runtime: ToolRuntime) => {
+return defineTool(
+	async ({ id }, ctx) => {
 		const stmt = `SELECT id, content, subtype, sort FROM blocks WHERE root_id=${sqlValue(id)} AND type='h' ORDER BY sort ASC LIMIT 200`;
 		const data = await kernel.sql(stmt);
 		const headings = (data || []).map((row: any) => ({
@@ -79,7 +79,7 @@ return tool(
 			title: row.content,
 			level: parseInt(row.subtype?.replace("h", "") || "1", 10),
 		}));
-		emitActivity(runtime, {
+		emitActivity(ctx, {
 			category: "lookup",
 			action: "read",
 			id,
@@ -98,8 +98,8 @@ return tool(
 }
 
 export function createReadBlockTool(i18n: Translator = defaultTranslator) {
-return tool(
-	async ({ id }, runtime: ToolRuntime) => {
+return defineTool(
+	async ({ id }, ctx) => {
 		const kramdowns: Record<string, string> = await kernel.blocks.getKramdowns([id]);
 		const content = kramdowns?.[id];
 		if (!content) {
@@ -109,7 +109,7 @@ return tool(
 			`SELECT id, type, subtype, root_id, parent_id, content, hpath FROM blocks WHERE id=${sqlValue(id)} LIMIT 1`,
 		);
 		const info = blockInfo?.[0] || {};
-		emitActivity(runtime, {
+		emitActivity(ctx, {
 			category: "lookup",
 			action: "read",
 			id,
@@ -135,8 +135,8 @@ return tool(
 }
 
 export function createSearchFulltextTool(i18n: Translator = defaultTranslator) {
-return tool(
-	async ({ query, page }, runtime: ToolRuntime) => {
+return defineTool(
+	async ({ query, page }, ctx) => {
 		const data = await kernel.search.fullText({
 			query,
 			page: page || 1,
@@ -153,7 +153,7 @@ return tool(
 			hpath: b.hPath,
 			type: b.type,
 		}));
-		emitActivity(runtime, {
+		emitActivity(ctx, {
 			category: "lookup",
 			action: "search",
 			label: query,
@@ -178,8 +178,8 @@ return tool(
 }
 
 export function createSearchDocumentsTool(i18n: Translator = defaultTranslator) {
-return tool(
-	async ({ keyword, notebook }, runtime: ToolRuntime) => {
+return defineTool(
+	async ({ keyword, notebook }, ctx) => {
 		const likePattern = sqlValue(`%${keyword}%`);
 		const stmt = notebook
 			? `SELECT id, content, hpath, box, updated FROM blocks WHERE type='d' AND box=${sqlValue(notebook)} AND content LIKE ${likePattern} ORDER BY updated DESC LIMIT 50`
@@ -192,7 +192,7 @@ return tool(
 			notebook: d.box,
 			updated: d.updated,
 		}));
-		emitActivity(runtime, {
+		emitActivity(ctx, {
 			category: "lookup",
 			action: "search",
 			label: keyword,

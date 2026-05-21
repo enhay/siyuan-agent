@@ -1,8 +1,8 @@
 import { ChatOpenAI } from "@langchain/openai";
-import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import type { AgentModel } from "./agent-types";
 import type { ModelConfig, ReasoningEffort } from "../types";
 import { ChatDeepSeek } from "../llms/deepseek";
-import { injectReasoningContent } from "../llms/reasoning";
+import { injectReasoningContent, patchReasoningRoundTrip } from "../llms/reasoning";
 
 export { injectReasoningContent };
 
@@ -29,7 +29,7 @@ export function getOpenAICompatibleModelKwargs(reasoningEffort: ReasoningEffort 
 export function createChatModel(
 	config: ModelConfig,
 	options: CreateChatModelOptions = {},
-): BaseChatModel {
+): AgentModel {
 	const temperature = options.temperature ?? config.temperature ?? 0;
 	const streaming = options.streaming ?? false;
 	if (config.providerType === "deepseek") {
@@ -43,17 +43,24 @@ export function createChatModel(
 				dangerouslyAllowBrowser: true,
 				baseURL: config.apiBaseURL || "https://api.deepseek.com",
 			},
-		}) as unknown as BaseChatModel;
+		}) as unknown as AgentModel;
 	}
-	return new ChatOpenAI({
+	const compatKwargs = getOpenAICompatibleModelKwargs(options.reasoningEffort);
+	const model = new ChatOpenAI({
 		model: config.model,
 		temperature,
 		streaming,
 		apiKey: config.apiKey,
-		modelKwargs: getOpenAICompatibleModelKwargs(options.reasoningEffort),
+		modelKwargs: compatKwargs,
 		configuration: {
 			dangerouslyAllowBrowser: true,
 			baseURL: config.apiBaseURL,
 		},
 	});
+	// Thinking-mode compatible endpoints reject follow-up calls whose assistant
+	// turn omits reasoning_content; patch the round-trip only when thinking is on.
+	if ((compatKwargs as { thinking?: { type?: string } }).thinking?.type === "enabled") {
+		patchReasoningRoundTrip(model);
+	}
+	return model;
 }

@@ -2,7 +2,7 @@
  * MCP (Model Context Protocol) Client
  *
  * Connects to MCP servers via Streamable HTTP transport and exposes their
- * tools as LangChain StructuredToolInterface instances.
+ * tools as LangChain AgentTool instances.
  *
  * Protocol reference: https://modelcontextprotocol.io/specification/2025-03-26
  *
@@ -12,7 +12,7 @@
  * - SSE streaming for notifications (optional)
  */
 import { tool } from "@langchain/core/tools";
-import type { StructuredToolInterface } from "@langchain/core/tools";
+import type { AgentTool } from "./agent-types";
 import { z } from "zod";
 import type { McpServerConfig } from "../types";
 
@@ -223,7 +223,7 @@ function buildZodSchema(inputSchema?: McpToolDefinition["inputSchema"]): z.ZodOb
 export function mcpToolsToLangChain(
 	client: McpClient,
 	toolDefs: McpToolDefinition[],
-): StructuredToolInterface[] {
+): AgentTool[] {
 	return toolDefs.map((def) => {
 		const schema = buildZodSchema(def.inputSchema);
 		return tool(
@@ -255,7 +255,7 @@ export interface McpConnectionStatus {
 
 export class McpManager {
 	private clients: Map<string, McpClient> = new Map();
-	private tools: Map<string, StructuredToolInterface[]> = new Map();
+	private tools: Map<string, AgentTool[]> = new Map();
 	private statuses: Map<string, McpConnectionStatus> = new Map();
 
 	/** Connect to all enabled MCP servers and collect their tools */
@@ -295,8 +295,8 @@ export class McpManager {
 	}
 
 	/** Get all tools from all connected MCP servers */
-	getAllTools(): StructuredToolInterface[] {
-		const allTools: StructuredToolInterface[] = [];
+	getAllTools(): AgentTool[] {
+		const allTools: AgentTool[] = [];
 		for (const tools of this.tools.values()) {
 			allTools.push(...tools);
 		}

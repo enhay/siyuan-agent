@@ -4,7 +4,7 @@ import { ChatGenerationChunk } from "@langchain/core/outputs";
 import type { BaseMessage } from "@langchain/core/messages";
 import type { ReasoningEffort } from "../types";
 import type { ModelProfile } from "./reasoning";
-import { injectReasoningContent, DEEPSEEK_PROFILES } from "./reasoning";
+import { patchReasoningRoundTrip, DEEPSEEK_PROFILES } from "./reasoning";
 
 export interface ChatDeepSeekInput {
 	model?: string;
@@ -26,9 +26,6 @@ export class ChatDeepSeek extends ChatOpenAI {
 		return {};
 	}
 
-	/** @internal */
-	sourceMessagesForRequest: BaseMessage[] | null = null;
-
 	constructor(fields: ChatDeepSeekInput = {}) {
 		const apiKey = fields.apiKey || process.env.DEEPSEEK_API_KEY;
 		if (!apiKey) {
@@ -46,69 +43,9 @@ export class ChatDeepSeek extends ChatOpenAI {
 			},
 		});
 
-		// Patch completions instance for DeepSeek-specific reasoning extraction
-		this.patchCompletions();
-	}
-
-	private patchCompletions() {
-		const originalConvertDelta =
-			this.completions._convertCompletionsDeltaToBaseMessageChunk.bind(
-				this.completions,
-			);
-		const originalConvertMessage =
-			this.completions._convertCompletionsMessageToBaseMessage.bind(
-				this.completions,
-			);
-		const originalCompletionWithRetry =
-			this.completions.completionWithRetry.bind(this.completions);
-
-		this.completions._convertCompletionsDeltaToBaseMessageChunk = (
-			delta,
-			rawResponse,
-			defaultRole,
-		) => {
-			const chunk = originalConvertDelta(delta, rawResponse, defaultRole);
-			chunk.additional_kwargs.reasoning_content = delta.reasoning_content;
-			chunk.response_metadata = {
-				...chunk.response_metadata,
-				model_provider: "deepseek",
-			};
-			return chunk;
-		};
-
-		this.completions._convertCompletionsMessageToBaseMessage = (
-			message,
-			rawResponse,
-		) => {
-			const langChainMessage = originalConvertMessage(message, rawResponse);
-			langChainMessage.additional_kwargs.reasoning_content =
-				message.reasoning_content;
-			langChainMessage.response_metadata = {
-				...langChainMessage.response_metadata,
-				model_provider: "deepseek",
-			};
-			return langChainMessage;
-		};
-
-		this.completions.completionWithRetry = (request, requestOptions?) => {
-			return originalCompletionWithRetry(
-				injectReasoningContent(request, this.sourceMessagesForRequest),
-				requestOptions,
-			);
-		};
-	}
-
-	override async _generate(
-		messages: BaseMessage[],
-		options: this["ParsedCallOptions"],
-		runManager?: any,
-	): Promise<any> {
-		this.sourceMessagesForRequest = messages;
-		try {
-			return await super._generate(messages, options, runManager);
-		} finally {
-			this.sourceMessagesForRequest = null;
-		}
+		// Reasoning round-trip (capture + echo back); shared with the
+		// OpenAI-compatible path. `<think>`-tag parsing stays below.
+		patchReasoningRoundTrip(this);
 	}
 
 	override async *_streamResponseChunks(
@@ -116,15 +53,10 @@ export class ChatDeepSeek extends ChatOpenAI {
 		options: this["ParsedCallOptions"],
 		runManager?: any,
 	): AsyncGenerator<any> {
-		this.sourceMessagesForRequest = messages;
-		try {
-			yield* this.processStreamWithThinkTags(
-				super._streamResponseChunks(messages, options, runManager),
-				options,
-			);
-		} finally {
-			this.sourceMessagesForRequest = null;
-		}
+		yield* this.processStreamWithThinkTags(
+			super._streamResponseChunks(messages, options, runManager),
+			options,
+		);
 	}
 
 	private async *processStreamWithThinkTags(

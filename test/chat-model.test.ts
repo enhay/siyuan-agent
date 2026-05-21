@@ -110,7 +110,7 @@ describe("injectReasoningContent", () => {
 		expect(request.messages[1]).not.toHaveProperty("reasoning_content");
 	});
 
-	it("ChatDeepSeek patches completions for reasoning injection", () => {
+	it("ChatDeepSeek patches the completions prototype for reasoning round-trip", () => {
 		const model = createChatModel(makeModel({
 			provider: "DeepSeek",
 			providerType: "deepseek",
@@ -118,15 +118,24 @@ describe("injectReasoningContent", () => {
 			apiBaseURL: "https://api.deepseek.com",
 			apiKey: "ds-test",
 		})) as any;
-		expect(model.completions.completionWithRetry).not.toBe(
-			Object.getPrototypeOf(model.completions).completionWithRetry,
-		);
-		expect(model.completions._convertCompletionsDeltaToBaseMessageChunk).not.toBe(
-			Object.getPrototypeOf(model.completions)._convertCompletionsDeltaToBaseMessageChunk,
-		);
-		expect(model.completions._convertCompletionsMessageToBaseMessage).not.toBe(
-			Object.getPrototypeOf(model.completions)._convertCompletionsMessageToBaseMessage,
-		);
-		expect(model.sourceMessagesForRequest).toBeNull();
+		// The patch is applied to the shared ChatOpenAICompletions prototype so it
+		// survives createAgent's bindTools rebind onto a fresh model instance.
+		const proto = Object.getPrototypeOf(model.completions);
+		expect(proto.__reasoningRoundTripPatched).toBe(true);
+	});
+});
+
+describe("openai-compatible thinking gate", () => {
+	it("enables thinking kwargs for high/low effort, not off/default", () => {
+		expect(getOpenAICompatibleModelKwargs("high")).toEqual({ thinking: { type: "enabled" } });
+		expect(getOpenAICompatibleModelKwargs("low")).toEqual({ thinking: { type: "enabled" } });
+		expect(getOpenAICompatibleModelKwargs("off")).toEqual({ thinking: { type: "disabled" } });
+		expect(getOpenAICompatibleModelKwargs("default")).toEqual({});
+	});
+
+	it("patches the completions prototype when a thinking-enabled model is created", () => {
+		const model = createChatModel(makeModel(), { reasoningEffort: "high" }) as any;
+		expect(model).toBeInstanceOf(ChatOpenAI);
+		expect(Object.getPrototypeOf(model.completions).__reasoningRoundTripPatched).toBe(true);
 	});
 });

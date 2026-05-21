@@ -41,10 +41,42 @@
 }
 
 .settings-panel {
+	position: relative;
 	display: flex;
 	flex-direction: column;
 	gap: 18px;
 	width: 100%;
+}
+
+/* Auto-save confirmation — fades in on save, out after a moment. */
+.settings-panel__savestatus {
+	position: absolute;
+	top: 0;
+	right: 0;
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 3px 9px;
+	border-radius: 999px;
+	font-size: 11px;
+	color: var(--b3-theme-on-surface);
+	background: color-mix(in srgb, var(--b3-theme-success, #2f9e44) 16%, transparent);
+	opacity: 0;
+	transform: translateY(-4px);
+	transition: opacity 0.18s ease, transform 0.18s ease;
+	pointer-events: none;
+	z-index: 2;
+}
+
+.settings-panel__savestatus.is-visible {
+	opacity: 1;
+	transform: translateY(0);
+}
+
+.settings-panel__savestatus::before {
+	content: "✓";
+	font-weight: 700;
+	color: var(--b3-theme-success, #2f9e44);
 }
 
 .settings-panel__header {

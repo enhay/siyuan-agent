@@ -6,6 +6,7 @@ import type { ScheduledTaskMeta, ToolUIEvent, UiMessage } from "../types";
 import type { ScheduledTaskManager } from "../core/scheduled-task-manager";
 import { escapeHtml, normalizeMessagesForDisplay } from "./chat-helpers";
 import { groupTaskRuns, type TaskRunGroup } from "./task-run-group";
+import { presetToSchedule, scheduleToPreset, DEFAULT_TIME, type SchedulePreset } from "../core/schedule-presets";
 import { defaultTranslator, type Translator } from "../i18n";
 
 /* ── Context interface ───────────────────────────────────────────────── */
@@ -51,31 +52,49 @@ export class TasksView {
 
 	async openTaskEditor(task?: ScheduledTaskMeta): Promise<void> {
 		const isEditing = Boolean(task);
-		const scheduleType = task?.scheduleType || "recurring";
+		const f = task
+			? scheduleToPreset(task)
+			: { preset: "daily" as SchedulePreset, time: DEFAULT_TIME, weekday: 1, cron: "", triggerAt: undefined };
+
+		const presets: SchedulePreset[] = ["daily", "weekdays", "weekly", "once", "custom"];
+		const presetOptions = presets
+			.map((p) => `<option value="${p}"${f.preset === p ? " selected" : ""}>${escapeHtml(this.t(`tasks.preset.${p}`))}</option>`)
+			.join("");
+		const weekdayOptions = [0, 1, 2, 3, 4, 5, 6]
+			.map((d) => `<option value="${d}"${f.weekday === d ? " selected" : ""}>${escapeHtml(this.t(`tasks.weekday.${d}`))}</option>`)
+			.join("");
+		const triggerAtValue = f.triggerAt ? this.toDatetimeLocal(f.triggerAt) : "";
+
 		this.ctx.taskDetailEl.innerHTML = `
 <form class="task-editor">
 	<label class="task-editor__field">
-		<span>${escapeHtml(this.t("tasks.editor.title"))}</span>
-		<input class="b3-text-field" name="title" value="${escapeHtml(task?.title || "")}" required />
+		<textarea class="b3-text-field task-editor__prompt" name="prompt" rows="5" required placeholder="${escapeHtml(this.t("tasks.editor.promptPlaceholder"))}">${escapeHtml(task?.prompt || "")}</textarea>
 	</label>
+	<div class="task-editor__schedule">
+		<label class="task-editor__field task-editor__field--inline">
+			<span>${escapeHtml(this.t("tasks.editor.schedule"))}</span>
+			<select class="b3-select" name="preset">${presetOptions}</select>
+		</label>
+		<label class="task-editor__field task-editor__field--inline" data-when="daily weekdays weekly">
+			<span>${escapeHtml(this.t("tasks.editor.time"))}</span>
+			<input class="b3-text-field" name="time" type="time" value="${escapeHtml(f.time)}" />
+		</label>
+		<label class="task-editor__field task-editor__field--inline" data-when="weekly">
+			<span>${escapeHtml(this.t("tasks.editor.weekday"))}</span>
+			<select class="b3-select" name="weekday">${weekdayOptions}</select>
+		</label>
+		<label class="task-editor__field task-editor__field--inline" data-when="once">
+			<span>${escapeHtml(this.t("tasks.editor.triggerAt"))}</span>
+			<input class="b3-text-field" name="triggerAt" type="datetime-local" value="${escapeHtml(triggerAtValue)}" />
+		</label>
+		<label class="task-editor__field" data-when="custom">
+			<span>${escapeHtml(this.t("tasks.editor.cron"))}</span>
+			<input class="b3-text-field" name="cron" value="${escapeHtml(f.cron)}" placeholder="0 18 * * *" />
+		</label>
+	</div>
 	<label class="task-editor__field">
-		<span>${escapeHtml(this.t("tasks.editor.prompt"))}</span>
-		<textarea class="b3-text-field" name="prompt" rows="6" required>${escapeHtml(task?.prompt || "")}</textarea>
-	</label>
-	<label class="task-editor__field">
-		<span>${escapeHtml(this.t("tasks.editor.type"))}</span>
-		<select class="b3-select" name="scheduleType">
-			<option value="recurring"${scheduleType === "recurring" ? " selected" : ""}>${escapeHtml(this.t("tasks.editor.recurring"))}</option>
-			<option value="once"${scheduleType === "once" ? " selected" : ""}>${escapeHtml(this.t("tasks.editor.once"))}</option>
-		</select>
-	</label>
-	<label class="task-editor__field">
-		<span>Cron</span>
-		<input class="b3-text-field" name="cron" value="${escapeHtml(task?.cron || "")}" placeholder="0 18 * * *" />
-	</label>
-	<label class="task-editor__field">
-		<span>${escapeHtml(this.t("tasks.editor.triggerAt"))}</span>
-		<input class="b3-text-field" name="triggerAt" value="${task?.triggerAt ? new Date(task.triggerAt).toISOString().slice(0, 16) : ""}" type="datetime-local" />
+		<span>${escapeHtml(this.t("tasks.editor.titleOptional"))}</span>
+		<input class="b3-text-field" name="title" value="${escapeHtml(task?.title || "")}" />
 	</label>
 	<label class="task-editor__field">
 		<span>${escapeHtml(this.t("tasks.editor.timezone"))}</span>
@@ -91,20 +110,39 @@ export class TasksView {
 	</div>
 </form>`;
 		const form = this.ctx.taskDetailEl.querySelector<HTMLFormElement>(".task-editor");
+		const presetSelect = form?.querySelector<HTMLSelectElement>("[name='preset']");
+		const syncConditionalFields = () => {
+			const active = presetSelect?.value || "daily";
+			form?.querySelectorAll<HTMLElement>("[data-when]").forEach((row) => {
+				const when = (row.dataset.when || "").split(" ");
+				row.classList.toggle("fn__none", !when.includes(active));
+			});
+		};
+		presetSelect?.addEventListener("change", syncConditionalFields);
+		syncConditionalFields();
+
 		form?.addEventListener("submit", (event) => {
 			event.preventDefault();
 			const formData = new FormData(form);
-			const nextScheduleType = formData.get("scheduleType") === "once" ? "once" : "recurring";
-			const triggerAtValue = formData.get("triggerAt");
-			const triggerAt = typeof triggerAtValue === "string" && triggerAtValue
-				? new Date(triggerAtValue).getTime()
+			const triggerAtRaw = formData.get("triggerAt");
+			const triggerAt = typeof triggerAtRaw === "string" && triggerAtRaw
+				? new Date(triggerAtRaw).getTime()
 				: undefined;
-			const payload = {
-				title: String(formData.get("title") || "").trim(),
-				prompt: String(formData.get("prompt") || "").trim(),
-				scheduleType: nextScheduleType as "once" | "recurring",
-				cron: String(formData.get("cron") || "").trim() || undefined,
+			const spec = presetToSchedule({
+				preset: (String(formData.get("preset") || "daily")) as SchedulePreset,
+				time: String(formData.get("time") || DEFAULT_TIME),
+				weekday: Number.parseInt(String(formData.get("weekday") || "1"), 10),
+				cron: String(formData.get("cron") || ""),
 				triggerAt,
+			});
+			const prompt = String(formData.get("prompt") || "").trim();
+			const title = String(formData.get("title") || "").trim() || this.deriveTitle(prompt);
+			const payload = {
+				title,
+				prompt,
+				scheduleType: spec.scheduleType,
+				cron: spec.cron || undefined,
+				triggerAt: spec.triggerAt,
 				timezone: String(formData.get("timezone") || "").trim() || undefined,
 				enabled: formData.get("enabled") === "on",
 			};
@@ -123,6 +161,19 @@ export class TasksView {
 		this.ctx.taskDetailEl.querySelector<HTMLElement>("[data-action='cancel']")?.addEventListener("click", () => {
 			void this.render();
 		});
+	}
+
+	/** First non-empty line of the prompt, truncated — used when no title is given. */
+	private deriveTitle(prompt: string): string {
+		const firstLine = prompt.split("\n").map((l) => l.trim()).find(Boolean) || this.t("tasks.untitled");
+		return firstLine.length > 40 ? `${firstLine.slice(0, 39)}…` : firstLine;
+	}
+
+	/** Epoch ms → "YYYY-MM-DDTHH:MM" in local time for <input type=datetime-local>. */
+	private toDatetimeLocal(ts: number): string {
+		const d = new Date(ts);
+		const pad = (n: number) => String(n).padStart(2, "0");
+		return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 	}
 
 	/* ── Private ─────────────────────────────────────────────────────── */
@@ -152,11 +203,21 @@ export class TasksView {
 
 		taskListEl.innerHTML = entries.map((entry) => {
 			const task = entry.task!;
-			const statusLabel = this.taskStatusText(task);
 			const scheduleLabel = this.formatTaskSchedule(task);
-			return `<button class="task-list-item${entry.id === this.selectedTaskId ? " task-list-item--active" : ""}" type="button" data-task-id="${entry.id}">
-				<div class="task-list-item__title">${escapeHtml(task.title)}</div>
-				<div class="task-list-item__meta">${escapeHtml(statusLabel)} · ${escapeHtml(scheduleLabel)}</div>
+			const timeLabel = task.lastRunAt
+				? this.t("tasks.lastRun", { time: this.formatDateTime(task.lastRunAt) })
+				: task.nextRunAt
+					? this.t("tasks.nextRun", { time: this.formatDateTime(task.nextRunAt) })
+					: "";
+			return `<button class="automation-card${entry.id === this.selectedTaskId ? " automation-card--active" : ""}${task.enabled ? "" : " automation-card--off"}" type="button" data-task-id="${entry.id}">
+				<span class="automation-card__dot automation-card__dot--${this.statusKey(task)}" title="${escapeHtml(this.taskStatusText(task))}"></span>
+				<span class="automation-card__body">
+					<span class="automation-card__title">${escapeHtml(task.title)}</span>
+					<span class="automation-card__meta">
+						<span class="automation-card__chip">${escapeHtml(scheduleLabel)}</span>
+						${timeLabel ? `<span class="automation-card__time">${escapeHtml(timeLabel)}</span>` : ""}
+					</span>
+				</span>
 			</button>`;
 		}).join("");
 		taskListEl.querySelectorAll<HTMLElement>("[data-task-id]").forEach((item) => {
@@ -276,10 +337,30 @@ export class TasksView {
 	}
 
 	private formatTaskSchedule(task: ScheduledTaskMeta): string {
-		if (task.scheduleType === "once") {
-			return this.t("tasks.schedule.once", { time: this.formatDateTime(task.triggerAt) });
+		const f = scheduleToPreset(task);
+		switch (f.preset) {
+			case "once":
+				return this.t("tasks.scheduleFriendly.once", { time: this.formatDateTime(task.triggerAt) });
+			case "daily":
+				return this.t("tasks.scheduleFriendly.daily", { time: f.time });
+			case "weekdays":
+				return this.t("tasks.scheduleFriendly.weekdays", { time: f.time });
+			case "weekly":
+				return this.t("tasks.scheduleFriendly.weekly", { weekday: this.t(`tasks.weekday.${f.weekday}`), time: f.time });
+			default:
+				return this.t("tasks.scheduleFriendly.custom", { cron: task.cron || this.t("tasks.schedule.noCron") });
 		}
-		return this.t("tasks.schedule.recurring", { cron: task.cron || this.t("tasks.schedule.noCron") });
+	}
+
+	/** Status modifier for the card dot. */
+	private statusKey(task: ScheduledTaskMeta): string {
+		if (!task.enabled) return "disabled";
+		switch (task.lastRunStatus) {
+			case "running": return "running";
+			case "success": return "success";
+			case "error": return "error";
+			default: return "idle";
+		}
 	}
 
 	private taskStatusText(task: ScheduledTaskMeta): string {

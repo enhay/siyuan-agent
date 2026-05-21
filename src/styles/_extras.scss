@@ -136,12 +136,11 @@ background: color-mix(in srgb, var(--agent-accent, var(--b3-theme-primary)) 8%, 
 .chat-todos-bar {
 	margin: 0 auto;
 	max-width: 480px;
-	background: var(--b3-theme-surface);
+	background: color-mix(in srgb, var(--agent-surface, var(--b3-theme-surface)) 96%, var(--agent-bg, var(--b3-theme-background)) 4%);
 	border: 1px solid var(--agent-border, var(--b3-border-color));
-	border-radius: 10px;
+	border-radius: 12px;
 	padding: 10px 14px;
 	font-size: 13px;
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 
 	&[open] > .chat-todos-bar__summary .chat-todos-bar__chevron {
 		transform: rotate(90deg);
@@ -169,10 +168,6 @@ background: color-mix(in srgb, var(--agent-accent, var(--b3-theme-primary)) 8%, 
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-
-	&::before {
-		content: "📋 ";
-	}
 }
 
 .chat-todos-bar__chevron {

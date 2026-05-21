@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SiYuan Agent — UI 草稿</title>
+<style>
+/* ============================================================
+   Simulated SiYuan host theme vars (--b3-*). In the real plugin
+   these come from SiYuan; here we fake believable values so the
+   draft renders standalone and dark-mode can be verified.
+   ============================================================ */
+:root{
+  --b3-theme-background:#ffffff;
+  --b3-theme-surface:#f6f7f9;
+  --b3-theme-surface-light:#eef0f3;
+  --b3-theme-on-background:#1f2328;
+  --b3-theme-on-surface:#5a6169;
+  --b3-theme-primary:#3b6df0;
+  --b3-theme-on-primary:#ffffff;
+  --b3-theme-error:#d23f31;
+  --b3-theme-success:#2f9e44;
+  --b3-border-color:#e3e6ea;
+  --b3-font-size:14px;
+  --b3-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+}
+[data-theme="dark"]{
+  --b3-theme-background:#1c1f23;
+  --b3-theme-surface:#23272c;
+  --b3-theme-surface-light:#2b3036;
+  --b3-theme-on-background:#e6e8eb;
+  --b3-theme-on-surface:#9aa2ab;
+  --b3-theme-primary:#5b8bff;
+  --b3-theme-on-primary:#ffffff;
+  --b3-theme-error:#ef5350;
+  --b3-theme-success:#51cf66;
+  --b3-border-color:#363c43;
+}
+
+/* ---- redesign token layer (derived from --b3-*, theme-aware) ---- */
+.panel{
+  --bg:var(--b3-theme-background);
+  --surface:var(--b3-theme-surface);
+  --surface-2:var(--b3-theme-surface-light);
+  --text:var(--b3-theme-on-background);
+  --muted:var(--b3-theme-on-surface);
+  --accent:var(--b3-theme-primary);
+  --on-accent:var(--b3-theme-on-primary);
+  --danger:var(--b3-theme-error);
+  --ok:var(--b3-theme-success);
+  --border:var(--b3-border-color);
+  /* theme-aware elevation: darken in dark, soft in light */
+  --shadow:0 6px 20px color-mix(in srgb, var(--text) 14%, transparent);
+  --hover:color-mix(in srgb, var(--text) 6%, transparent);
+  --accent-tint:color-mix(in srgb, var(--accent) 12%, var(--bg));
+  --radius:10px;
+  --tap:36px;            /* desktop comfortable; coarse pointer -> 44 */
+}
+
+/* ============================ demo chrome ============================ */
+*{box-sizing:border-box}
+body{
+  margin:0;background:#0d0f12;color:#c9d1d9;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+}
+.toolbar{
+  position:sticky;top:0;z-index:50;display:flex;gap:14px;align-items:center;flex-wrap:wrap;
+  padding:12px 18px;background:#15181d;border-bottom:1px solid #262b31;
+}
+.toolbar h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.2px}
+.toolbar .seg{display:inline-flex;border:1px solid #2c333b;border-radius:8px;overflow:hidden}
+.toolbar .seg button{background:transparent;color:#9aa6b2;border:0;padding:6px 12px;font-size:12px;cursor:pointer}
+.toolbar .seg button[aria-pressed="true"]{background:#2563eb;color:#fff}
+.toolbar .hint{font-size:11px;color:#6b7785;margin-left:auto}
+.board{display:flex;flex-wrap:wrap;gap:28px;padding:28px;align-items:flex-start}
+.frame{display:flex;flex-direction:column;gap:10px}
+.frame .cap{max-width:420px;font-size:12px;line-height:1.5;color:#8b97a4}
+.frame .cap b{color:#cdd6df;font-weight:600}
+.frame .cap .fix{color:#5fb37a}
+
+/* ============================ the panel ============================ */
+.panel{
+  width:420px;height:640px;display:flex;flex-direction:column;overflow:hidden;
+  background:var(--bg);color:var(--text);border:1px solid var(--border);
+  border-radius:14px;font-size:var(--b3-font-size);
+  font-family:var(--b3-font-family);
+}
+body.mobile .panel{width:360px}
+
+/* header — ONE nav idiom: icon buttons */
+.hd{display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--border);min-height:48px}
+.hd__title{font-weight:600;font-size:14px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hd__back{margin-right:2px}
+.iconbtn{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:var(--tap);height:var(--tap);min-width:var(--tap);
+  border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer;
+  transition:background-color .15s ease,color .15s ease;
+}
+.iconbtn:hover{background:var(--hover);color:var(--text)}
+.iconbtn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.iconbtn.is-active{color:var(--accent)}
+.iconbtn svg{width:18px;height:18px}
+
+/* body */
+.body{flex:1;overflow:auto;padding:14px}
+
+/* ---- welcome / empty ---- */
+.welcome{height:100%;display:flex;flex-direction:column;justify-content:center;gap:16px;padding:8px 6px}
+.welcome h2{margin:0;font-size:20px;font-weight:650;letter-spacing:-.2px}
+.welcome p{margin:0;color:var(--muted);font-size:13px;line-height:1.55;max-width:40ch}
+.chips{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.chip{
+  text-align:left;border:1px solid var(--border);background:var(--surface);
+  color:var(--text);border-radius:var(--radius);padding:11px 13px;font-size:13px;cursor:pointer;
+  display:flex;gap:10px;align-items:center;transition:border-color .15s ease,background-color .15s ease;
+}
+.chip:hover{border-color:var(--accent);background:var(--accent-tint)}
+.chip .ic{color:var(--accent);flex:none}
+.welcome .keys{font-size:11px;color:var(--muted);margin-top:6px}
+.kbd{font:inherit;font-size:11px;border:1px solid var(--border);border-bottom-width:2px;border-radius:5px;padding:1px 5px;color:var(--text);background:var(--surface)}
+
+/* ---- messages ---- */
+.msg{margin-bottom:16px;display:flex;flex-direction:column}
+.msg--user{align-items:flex-end}
+.bubble{max-width:85%;background:var(--accent-tint);border:1px solid color-mix(in srgb,var(--accent) 22%,transparent);
+  padding:9px 12px;border-radius:12px 12px 4px 12px;font-size:13px;line-height:1.5}
+.msg--ai .content{max-width:72ch;font-size:13px;line-height:1.6}
+.msg--ai .content p{margin:0 0 8px}
+.msg--ai .content ul{margin:0 0 8px;padding-left:18px}
+.msg--ai .content li{margin:2px 0}
+.actionbar{display:flex;gap:2px;margin-top:6px;opacity:.55;transition:opacity .15s ease}  /* visible, not hover-only */
+.msg:hover .actionbar{opacity:1}
+.actionbar .iconbtn{width:30px;height:30px;min-width:30px}
+.actionbar .iconbtn svg{width:15px;height:15px}
+
+/* reasoning */
+.reason{border:1px solid var(--border);border-radius:8px;background:var(--surface);margin-bottom:10px;font-size:12px}
+.reason>summary{list-style:none;cursor:pointer;padding:7px 11px;color:var(--muted);display:flex;gap:7px;align-items:center}
+.reason>summary::-webkit-details-marker{display:none}
+.reason .rbody{padding:0 11px 9px;color:var(--muted);line-height:1.55}
+
+/* tool activity cards */
+.tool{border:1px solid var(--border);border-radius:8px;background:var(--surface);margin-bottom:10px;overflow:hidden}
+.tool__row{display:flex;align-items:center;gap:9px;padding:8px 11px;font-size:12px}
+.tool__badge{font-size:10px;font-weight:600;padding:2px 7px;border-radius:999px;letter-spacing:.3px}
+.badge--look{background:color-mix(in srgb,var(--accent) 14%,var(--bg));color:var(--accent)}
+.badge--change{background:color-mix(in srgb,var(--ok) 16%,var(--bg));color:var(--ok)}
+.tool__label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tool__meta{color:var(--muted);font-size:11px}
+.tool__undo{font-size:11px;color:var(--accent);background:transparent;border:0;cursor:pointer;padding:4px 6px;border-radius:6px}
+.tool__undo:hover{background:var(--hover)}
+.tool--archive .tool__row{color:var(--muted)}
+
+/* streaming */
+.streaming{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:12px;padding:2px}
+.dot-spin{width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---- composer ---- */
+.composer{border-top:1px solid var(--border);padding:10px}
+.composer__box{border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:8px 10px;display:flex;flex-direction:column;gap:8px}
+.composer__box:focus-within{border-color:var(--accent)}
+.composer textarea{border:0;background:transparent;resize:none;width:100%;color:var(--text);font:inherit;font-size:13px;line-height:1.5;min-height:24px;outline:none}
+.composer__row{display:flex;align-items:center;gap:6px}
+.pill{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 10px;border:1px solid var(--border);
+  border-radius:999px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer}
+.pill:hover{background:var(--hover)}
+.pill .muted{color:var(--muted)}
+.spacer{flex:1}
+.send{width:var(--tap);height:var(--tap);min-width:var(--tap);border-radius:50%;border:0;cursor:pointer;
+  background:var(--accent);color:var(--on-accent);display:inline-flex;align-items:center;justify-content:center}
+.send:hover{filter:brightness(1.06)}
+.send svg{width:17px;height:17px}
+
+/* ---- automations ---- */
+.listhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.listhead .n{font-size:12px;color:var(--muted)}
+.btn{height:32px;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:var(--hover)}
+.btn--primary{background:var(--accent);color:var(--on-accent);border-color:transparent}
+.btn--primary:hover{filter:brightness(1.06)}
+.btn--danger{color:var(--on-accent);background:var(--danger);border-color:transparent}
+.task{border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:11px 12px;margin-bottom:9px}
+.task__top{display:flex;align-items:center;gap:9px}
+.sdot{width:8px;height:8px;border-radius:50%;flex:none}
+.sdot--ok{background:var(--ok)}
+.sdot--run{background:var(--accent);animation:pulse 1.4s ease-in-out infinite}
+.sdot--err{background:var(--danger)}
+.sdot--off{background:color-mix(in srgb,var(--muted) 55%,transparent)}
+@keyframes pulse{50%{opacity:.35}}
+.task__title{flex:1;font-size:13px;font-weight:550;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.task__sub{display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin-top:6px;padding-left:17px}
+.task__err{margin-top:8px;margin-left:17px;font-size:11px;color:var(--danger);background:color-mix(in srgb,var(--danger) 10%,var(--bg));
+  border-radius:6px;padding:6px 8px;display:flex;gap:8px;align-items:center;justify-content:space-between}
+.linklike{color:var(--accent);background:none;border:0;cursor:pointer;font-size:11px;padding:0}
+
+/* ---- settings ---- */
+.tabs{display:flex;gap:4px;margin-bottom:14px;flex-wrap:wrap}
+.tab{height:30px;padding:0 12px;border-radius:999px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:12px;cursor:pointer}
+.tab[aria-selected="true"]{background:var(--accent-tint);color:var(--accent);border-color:transparent}
+.field{margin-bottom:13px}
+.field label{display:block;font-size:12px;font-weight:550;margin-bottom:5px}
+.field .help{font-size:11px;color:var(--muted);margin-top:4px}
+.input{width:100%;height:34px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);
+  padding:0 10px;font:inherit;font-size:13px;outline:none}
+.input:focus{border-color:var(--accent)}
+.card{border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:12px;margin-bottom:12px}
+.card__hd{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.card__hd .name{flex:1;font-weight:600;font-size:13px}
+.saved{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--ok)}
+.row{display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--border)}
+.row .name{flex:1;font-size:12px}
+.muted{color:var(--muted)}
+.testline{display:flex;align-items:center;gap:10px;margin-top:6px}
+
+/* ---- confirm dialog ---- */
+.scrim{position:absolute;inset:0;background:color-mix(in srgb,#000 42%,transparent);display:flex;align-items:center;justify-content:center;padding:24px}
+.dialog{background:var(--bg);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);padding:18px;max-width:300px;width:100%}
+.dialog h3{margin:0 0 8px;font-size:15px}
+.dialog p{margin:0 0 16px;font-size:12px;color:var(--muted);line-height:1.5}
+.dialog .acts{display:flex;gap:8px;justify-content:flex-end}
+
+/* relative wrapper so scrim is local to a frame */
+.panel{position:relative}
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <h1>SiYuan Agent · UI 草稿</h1>
+  <span class="seg" role="group" aria-label="theme">
+    <button data-theme-btn="light" aria-pressed="true">Light</button>
+    <button data-theme-btn="dark" aria-pressed="false">Dark</button>
+  </span>
+  <span class="seg" role="group" aria-label="width">
+    <button data-width-btn="desktop" aria-pressed="true">Desktop 420</button>
+    <button data-width-btn="mobile" aria-pressed="false">Mobile 360</button>
+  </span>
+  <span class="hint">草稿用于确认方向。颜色/控件模拟 SiYuan 主题变量；切 Dark 验证暗色正确性。</span>
+</div>
+
+<div class="board">
+
+  <!-- 1. Chat — welcome / empty -->
+  <div class="frame">
+    <div class="cap"><b>① Chat · 欢迎/空状态</b><br>
+      <span class="fix">修复：</span>补齐被砍掉的欢迎页（标题+一句话+快捷提示 chips）；统一 header（⏰自动化 / ⚙设置 / ＋新建 一套图标范式）；露出 <span class="kbd">/</span> 与 <span class="kbd">⌥⌘L</span>。</div>
+    <div class="panel">
+      <div class="hd">
+        <button class="iconbtn" aria-label="会话列表" title="会话">☰</button>
+        <div class="hd__title">新对话</div>
+        <button class="iconbtn" aria-label="新对话" title="新对话">＋</button>
+        <button class="iconbtn" aria-label="自动化" title="自动化">⏰</button>
+        <button class="iconbtn" aria-label="设置" title="设置">⚙</button>
+      </div>
+      <div class="body">
+        <div class="welcome">
+          <h2>嗨，我是你的笔记助手</h2>
+          <p>问我关于笔记的任何事，或让我帮你查找、整理、改写、安排定时任务。</p>
+          <div class="chips">
+            <button class="chip"><span class="ic">📄</span>总结我最近的笔记</button>
+            <button class="chip"><span class="ic">🔎</span>查找关于「___」的笔记</button>
+            <button class="chip"><span class="ic">🗂️</span>梳理某个文档的结构</button>
+            <button class="chip"><span class="ic">✅</span>帮我规划一个多步任务</button>
+          </div>
+          <div class="keys">输入 <span class="kbd">/</span> 唤起命令 · <span class="kbd">@</span> 引用文档 · 编辑器内 <span class="kbd">⌥⌘L</span> 发送选中内容</div>
+        </div>
+      </div>
+      <div class="composer">
+        <div class="composer__box">
+          <textarea rows="1" placeholder="给笔记助手发消息…"></textarea>
+          <div class="composer__row">
+            <button class="iconbtn" title="附加上下文" aria-label="附加上下文">＋</button>
+            <button class="pill" title="模型与思考力度">deepseek-chat <span class="muted">· 思考 高 ▾</span></button>
+            <span class="spacer"></span>
+            <button class="send" aria-label="发送"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 11l18-8-8 18-2-7-8-3z"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. Chat — active conversation -->
+  <div class="frame">
+    <div class="cap"><b>② Chat · 进行中对话</b><br>
+      <span class="fix">修复：</span>正文限宽 72ch；工具卡片 lookup/change 分色；change 卡片带 <b>撤销</b>（找回文档里说明却被注释掉的 Undo）；操作条常驻可见（非 hover-only，触屏可用）；reasoning 可折叠；流式状态清晰。</div>
+    <div class="panel">
+      <div class="hd">
+        <button class="iconbtn" aria-label="会话列表">☰</button>
+        <div class="hd__title">整理「项目 A」周报</div>
+        <button class="iconbtn" aria-label="新对话">＋</button>
+        <button class="iconbtn" aria-label="自动化">⏰</button>
+        <button class="iconbtn" aria-label="设置">⚙</button>
+      </div>
+      <div class="body">
+        <div class="msg msg--user"><div class="bubble">把「项目 A」笔记本里这周的笔记整理成一份周报，追加到《周报》文档。</div></div>
+
+        <div class="msg msg--ai">
+          <details class="reason"><summary>▸ 思考了 4 秒</summary><div class="rbody">先按时间过滤本周文档，读取要点，再合并为结构化周报，最后追加到目标文档。</div></details>
+
+          <div class="tool tool--archive">
+            <div class="tool__row"><span class="tool__badge badge--look">查询</span><span class="tool__label">检索了「项目 A · 本周」3 个文档</span><span class="tool__meta">▸</span></div>
+          </div>
+
+          <div class="content">
+            <p>已整理本周 3 篇笔记，要点如下：</p>
+            <ul>
+              <li>完成登录流程重构，待联调</li>
+              <li>新增 2 个上游接口，文档已同步</li>
+              <li>遗留：移动端触控目标偏小，下周处理</li>
+            </ul>
+            <p>已追加到《周报》文档：</p>
+          </div>
+
+          <div class="tool">
+            <div class="tool__row">
+              <span class="tool__badge badge--change">变更</span>
+              <span class="tool__label">向《周报》追加 1 个段落组</span>
+              <span class="tool__meta">/项目 A/周报</span>
+              <button class="tool__undo">撤销</button>
+            </div>
+          </div>
+
+          <div class="actionbar">
+            <button class="iconbtn" title="复制" aria-label="复制">⧉</button>
+            <button class="iconbtn" title="重新生成" aria-label="重新生成">↻</button>
+            <button class="iconbtn" title="赞" aria-label="赞">👍</button>
+          </div>
+        </div>
+
+        <div class="streaming"><span class="dot-spin"></span> 正在生成…</div>
+      </div>
+      <div class="composer">
+        <div class="composer__box">
+          <textarea rows="1" placeholder="继续追问…"></textarea>
+          <div class="composer__row">
+            <button class="iconbtn" title="附加上下文">＋</button>
+            <button class="pill">deepseek-chat <span class="muted">· 思考 高 ▾</span></button>
+            <span class="spacer"></span>
+            <button class="send" aria-label="停止" style="background:var(--surface-2);color:var(--text)"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. Automations -->
+  <div class="frame">
+    <div class="cap"><b>③ Automations · 定时任务</b><br>
+      <span class="fix">修复：</span>成为 header 一等入口（不再藏在 composer 的「+」里）；状态点词汇 idle/run/ok/err/off；日程<b>人话化</b>「每天 · 09:00」+「下次 3 小时后」；失败给友好信息+重试；删除走确认。</div>
+    <div class="panel">
+      <div class="hd">
+        <button class="iconbtn hd__back" aria-label="返回">‹</button>
+        <div class="hd__title">自动化</div>
+        <button class="btn btn--primary" style="height:30px">＋ 新建</button>
+      </div>
+      <div class="body">
+        <div class="listhead"><span class="n">3 个任务</span></div>
+
+        <div class="task">
+          <div class="task__top"><span class="sdot sdot--run"></span><span class="task__title">每日笔记摘要</span><button class="iconbtn" style="width:30px;height:30px;min-width:30px" aria-label="更多">⋯</button></div>
+          <div class="task__sub"><span>每天 · 09:00</span><span>·</span><span>正在运行…</span></div>
+        </div>
+
+        <div class="task">
+          <div class="task__top"><span class="sdot sdot--ok"></span><span class="task__title">周一周计划提醒</span><button class="iconbtn" style="width:30px;height:30px;min-width:30px" aria-label="更多">⋯</button></div>
+          <div class="task__sub"><span>每周一 · 08:30</span><span>·</span><span>下次 3 天后</span><span>·</span><span class="muted">上次成功</span></div>
+        </div>
+
+        <div class="task">
+          <div class="task__top"><span class="sdot sdot--err"></span><span class="task__title">同步到外部知识库</span><button class="iconbtn" style="width:30px;height:30px;min-width:30px" aria-label="更多">⋯</button></div>
+          <div class="task__sub"><span>每天 · 22:00</span><span>·</span><span>下次 12 小时后</span></div>
+          <div class="task__err"><span>上次失败：API key 无效，请到设置检查。</span><button class="linklike">重试</button></div>
+        </div>
+
+        <div class="task" style="opacity:.7">
+          <div class="task__top"><span class="sdot sdot--off"></span><span class="task__title">月度归档（已停用）</span><button class="iconbtn" style="width:30px;height:30px;min-width:30px" aria-label="更多">⋯</button></div>
+          <div class="task__sub"><span>每月 1 日 · 00:00</span><span>·</span><span class="muted">已停用</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. Settings -->
+  <div class="frame">
+    <div class="cap"><b>④ Settings · 模型服务</b><br>
+      <span class="fix">修复：</span>保存有 <b>Saved ✓</b> 反馈（不再静默）；每个服务有<b>测试连接</b>；<b>MCP 区块补回</b>（原本代码存在却没渲染→功能死掉）；删除走确认；触控目标加大。</div>
+    <div class="panel">
+      <div class="hd">
+        <button class="iconbtn hd__back" aria-label="返回">‹</button>
+        <div class="hd__title">设置</div>
+      </div>
+      <div class="body">
+        <div class="tabs" role="tablist">
+          <button class="tab" aria-selected="true">模型服务</button>
+          <button class="tab" aria-selected="false">默认模型</button>
+          <button class="tab" aria-selected="false">MCP</button>
+          <button class="tab" aria-selected="false">通用</button>
+        </div>
+
+        <div class="card">
+          <div class="card__hd"><span class="name">OpenAI 兼容</span><span class="saved">✓ 已保存</span>
+            <button class="iconbtn" style="width:30px;height:30px;min-width:30px" aria-label="删除服务">🗑</button></div>
+          <div class="field"><label>API Key</label><input class="input" type="password" value="sk-••••••••••••" /></div>
+          <div class="field"><label>API Base URL</label><input class="input" type="text" value="https://api.deepseek.com/v1" />
+            <div class="testline"><button class="btn">测试连接</button><span class="saved">✓ 连接正常 · 142ms</span></div>
+          </div>
+          <div class="row"><span class="name">deepseek-chat <span class="muted">· 默认</span></span>
+            <button class="iconbtn" style="width:30px;height:30px;min-width:30px" aria-label="编辑">✎</button>
+            <button class="iconbtn" style="width:30px;height:30px;min-width:30px" aria-label="删除">🗑</button></div>
+          <div class="row"><span class="name">deepseek-reasoner</span>
+            <button class="iconbtn" style="width:30px;height:30px;min-width:30px" aria-label="编辑">✎</button>
+            <button class="iconbtn" style="width:30px;height:30px;min-width:30px" aria-label="删除">🗑</button></div>
+          <div style="margin-top:10px"><button class="btn">＋ 添加模型</button></div>
+        </div>
+
+        <button class="btn">＋ 添加模型服务</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. Confirm dialog -->
+  <div class="frame">
+    <div class="cap"><b>⑤ 破坏性操作确认</b><br>
+      <span class="fix">修复：</span>删除会话/服务/任务此前一键即删、不可撤销 → 统一加确认（或撤销 toast）。这是审计里 <b>P0 · 跨面最高优先</b> 的安全缺口。</div>
+    <div class="panel">
+      <div class="hd"><button class="iconbtn" aria-label="会话列表">☰</button><div class="hd__title">会话历史</div><button class="iconbtn" aria-label="新对话">＋</button><button class="iconbtn" aria-label="自动化">⏰</button><button class="iconbtn" aria-label="设置">⚙</button></div>
+      <div class="body" style="filter:blur(.4px)">
+        <div class="task"><div class="task__top"><span class="task__title">整理「项目 A」周报</span></div><div class="task__sub"><span>2 分钟前</span></div></div>
+        <div class="task"><div class="task__top"><span class="task__title">查找架构相关笔记</span></div><div class="task__sub"><span>昨天</span></div></div>
+      </div>
+      <div class="scrim">
+        <div class="dialog">
+          <h3>删除这个会话？</h3>
+          <p>「整理「项目 A」周报」将被删除，此操作无法撤销。</p>
+          <div class="acts"><button class="btn">取消</button><button class="btn btn--danger">删除</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const root=document.documentElement;
+document.querySelectorAll('[data-theme-btn]').forEach(b=>b.onclick=()=>{
+  root.dataset.theme=b.dataset.themeBtn;
+  document.querySelectorAll('[data-theme-btn]').forEach(x=>x.setAttribute('aria-pressed', x===b));
+});
+document.querySelectorAll('[data-width-btn]').forEach(b=>b.onclick=()=>{
+  document.body.classList.toggle('mobile', b.dataset.widthBtn==='mobile');
+  document.querySelectorAll('[data-width-btn]').forEach(x=>x.setAttribute('aria-pressed', x===b));
+});
+</script>
+</body>
+</html>

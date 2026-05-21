@@ -30,7 +30,7 @@ export interface ActivityBlockRefs {
 	archiveListEl: HTMLElement;
 }
 
-export type SettingsSection = "general" | "model-services" | "default-models" | "tracing";
+export type SettingsSection = "general" | "model-services" | "default-models" | "mcp" | "tracing";
 
 export interface ComposerKeyEvent {
 	key: string;

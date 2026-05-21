@@ -1,6 +1,6 @@
 import { showMessage } from "siyuan";
 import { CronExpressionParser } from "cron-parser";
-import type { StructuredToolInterface } from "@langchain/core/tools";
+import type { AgentTool } from "./agent-types";
 import type {
 	AgentConfig,
 	AgentState,
@@ -41,7 +41,7 @@ export interface ScheduledTaskUpdateInput {
 interface ScheduledTaskManagerOptions {
 	store: SessionStore;
 	getConfig: () => AgentConfig | Promise<AgentConfig>;
-	getTools: () => StructuredToolInterface[];
+	getTools: () => AgentTool[];
 	i18n?: Translator;
 }
 

@@ -1,7 +1,7 @@
 import { createAgent, summarizationMiddleware } from "langchain";
 import { LangChainTracer } from "@langchain/core/tracers/tracer_langchain";
 import { Client } from "langsmith";
-import type { StructuredToolInterface } from "@langchain/core/tools";
+import type { AgentTool } from "./agent-types";
 import { buildSystemPrompt, resolveModelConfig, type AgentConfig, type ModelConfig, type ReasoningEffort } from "../types";
 import { defaultTranslator, type Translator } from "../i18n";
 import { createChatModel } from "./chat-model";
@@ -59,7 +59,7 @@ export interface MakeAgentOptions {
 /** Builds the agent. No fetch: guideContent must be supplied by the caller. */
 export function makeAgent(
 	config: AgentConfig,
-	tools: StructuredToolInterface[],
+	tools: AgentTool[],
 	opts: MakeAgentOptions = {},
 ) {
 	const { extraSystemPrompt, modelOverride, i18n = defaultTranslator, reasoningEffort = "default", guideContent = "" } = opts;

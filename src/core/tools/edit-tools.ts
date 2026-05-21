@@ -1,4 +1,4 @@
-import { tool, ToolRuntime } from "@langchain/core/tools";
+import { defineTool } from "./define-tool";
 import { z } from "zod";
 import { openTab } from "siyuan";
 import { emitActivity } from "./siyuan-api";
@@ -20,8 +20,8 @@ function extractOperationBlockIds(data: any): string[] {
 }
 
 export function createEditBlocksTool(i18n: Translator = defaultTranslator) {
-return tool(
-	async ({ blocks }, runtime: ToolRuntime) => {
+return defineTool(
+	async ({ blocks }, ctx) => {
 		const ids = blocks.map((b: { id: string }) => b.id);
 		const originals: Record<string, string> = await kernel.blocks.getKramdowns(ids);
 		const treeInfos: Record<string, any> = await kernel.blocks.getTreeInfos(ids);
@@ -87,7 +87,7 @@ return tool(
 			}
 		}
 
-		if (runtime.writer) {
+		if (ctx.canEmit) {
 			const rootIDs = [...new Set(
 				ids
 					.map((id) => treeInfos[id]?.rootID)
@@ -100,7 +100,7 @@ return tool(
 				);
 				path = rootDoc?.[0]?.hpath || "";
 			}
-			emitActivity(runtime, {
+			emitActivity(ctx, {
 				category: "change",
 				action: "edit",
 				id: rootIDs[0],
@@ -127,8 +127,8 @@ return tool(
 }
 
 export function createAppendBlockTool(i18n: Translator = defaultTranslator) {
-return tool(
-	async ({ parentID, markdown }, runtime: ToolRuntime) => {
+return defineTool(
+	async ({ parentID, markdown }, ctx) => {
 		const data = await kernel.blocks.append({
 			data: markdown,
 			parentID,
@@ -139,7 +139,7 @@ return tool(
 		const blockIDs = Array.isArray(data)
 			? data.map((item: any) => item?.doOperations?.[0]?.id).filter(Boolean)
 			: [];
-		emitActivity(runtime, {
+		emitActivity(ctx, {
 			category: "change",
 			action: "append",
 			id: parentID,
@@ -162,15 +162,15 @@ return tool(
 }
 
 export function createCreateDocumentTool(i18n: Translator = defaultTranslator) {
-return tool(
-	async ({ notebook, path, markdown }, runtime: ToolRuntime) => {
+return defineTool(
+	async ({ notebook, path, markdown }, ctx) => {
 		const id = await kernel.filetree.createDocWithMd({
 			notebook,
 			path,
 			markdown: markdown || "",
 		});
 		openTab({ app: (globalThis as any).siyuanApp, doc: { id } });
-		emitActivity(runtime, {
+		emitActivity(ctx, {
 			category: "change",
 			action: "create",
 			id,
@@ -194,10 +194,10 @@ return tool(
 }
 
 export function createMoveDocumentTool(i18n: Translator = defaultTranslator) {
-return tool(
-	async ({ fromIDs, toID }, runtime: ToolRuntime) => {
+return defineTool(
+	async ({ fromIDs, toID }, ctx) => {
 		await kernel.filetree.moveDocsByID(fromIDs, toID);
-		emitActivity(runtime, {
+		emitActivity(ctx, {
 			category: "change",
 			action: "move",
 			id: fromIDs[0],
@@ -218,10 +218,10 @@ return tool(
 }
 
 export function createRenameDocumentTool(i18n: Translator = defaultTranslator) {
-return tool(
-	async ({ id, title }, runtime: ToolRuntime) => {
+return defineTool(
+	async ({ id, title }, ctx) => {
 		await kernel.filetree.renameDocByID(id, title);
-		emitActivity(runtime, {
+		emitActivity(ctx, {
 			category: "change",
 			action: "rename",
 			id,
@@ -245,8 +245,8 @@ return tool(
 // High-impact and not undoable in-app — only registered in interactive chat
 // (via getDefaultTools opts), never in the autonomous scheduled-task toolset.
 export function createDeleteDocumentTool(i18n: Translator = defaultTranslator) {
-return tool(
-	async ({ id }, runtime: ToolRuntime) => {
+return defineTool(
+	async ({ id }, ctx) => {
 		// Best-effort: resolve a human-readable target before deleting so the
 		// activity card and the returned record name the doc, not just its ID.
 		let hPath = "";
@@ -257,7 +257,7 @@ return tool(
 		}
 		const title = hPath.split("/").filter(Boolean).pop() || id;
 		await kernel.filetree.removeDocByID(id);
-		emitActivity(runtime, {
+		emitActivity(ctx, {
 			category: "change",
 			action: "delete",
 			id,

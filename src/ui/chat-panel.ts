@@ -1,5 +1,5 @@
 import { Plugin, showMessage } from "siyuan";
-import type { StructuredToolInterface } from "@langchain/core/tools";
+import type { AgentTool } from "../core/agent-types";
 import {
 	AgentConfig,
 	AgentState,
@@ -25,6 +25,7 @@ import { mergeState, runAgentStream } from "../core/stream-runtime";
 import { renderMarkdown } from "./markdown";
 import { SessionStore } from "../core/session-store";
 import { ScheduledTaskManager } from "../core/scheduled-task-manager";
+import { presetToSchedule, DEFAULT_TIME, type PresetForm, type SchedulePreset } from "../core/schedule-presets";
 import { ensureMessagesUi } from "../core/ui-message-builder";
 import { compactMessages, shouldCompact } from "../core/compaction";
 import { createChatModel } from "../core/chat-model";
@@ -58,7 +59,7 @@ const INIT_DOC_PATH = `/${INIT_DOC_TITLE}`;
 export class ChatPanel implements ChatPanelHost {
 	private container: HTMLElement;
 	private plugin: Plugin;
-	private tools: StructuredToolInterface[];
+	private tools: AgentTool[];
 	private store: SessionStore;
 	private taskManager: ScheduledTaskManager;
 	private panelEl: HTMLElement;
@@ -68,6 +69,8 @@ export class ChatPanel implements ChatPanelHost {
 	private todosDockEl: HTMLElement;
 	private bottomBarEl: HTMLElement;
 	private composerBodyEl: HTMLElement;
+	private viewHeaderEl: HTMLElement;
+	private viewTitleEl: HTMLElement;
 
 	private sessionToggleEl: HTMLButtonElement;
 	private sessionListEl: HTMLElement;
@@ -81,6 +84,9 @@ export class ChatPanel implements ChatPanelHost {
 
 	private activeSession: SessionData;
 	private currentView: "chat" | "tasks" | "settings" = "chat";
+	/** Composer mode: normal chat vs inline automation-creation. */
+	private composerMode: "chat" | "automation" = "chat";
+	private automationForm: PresetForm = { preset: "daily", time: DEFAULT_TIME, weekday: 1, cron: "", triggerAt: undefined };
 	private pendingContext: string | null = null;
 	private abortCtrl: AbortController | null = null;
 	private pendingEl: HTMLElement | null = null;
@@ -91,7 +97,11 @@ export class ChatPanel implements ChatPanelHost {
 	private placeholderIndex = 0;
 	private placeholderTimer: number | null = null;
 	private unsubs: Array<() => void> = [];
-	private readonly handleDocumentClick = () => this.closeModelPicker();
+	private readonly handleDocumentClick = () => {
+		this.closeModelPicker();
+		this.closePlusMenu();
+		this.closeSchedMenu();
+	};
 	private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
 		if (event.key === "Escape") this.closeModelPicker();
 	};
@@ -104,7 +114,7 @@ export class ChatPanel implements ChatPanelHost {
 	constructor(
 		element: HTMLElement,
 		plugin: Plugin,
-		tools: StructuredToolInterface[],
+		tools: AgentTool[],
 		store: SessionStore,
 		taskManager: ScheduledTaskManager,
 		i18n: Translator = defaultTranslator,
@@ -165,7 +175,7 @@ export class ChatPanel implements ChatPanelHost {
 		<div class="chat-panel__session-bar">
 			<button class="chat-panel__session-toggle b3-button b3-button--text" type="button" aria-expanded="false">
 				<span class="chat-panel__session-toggle-main">
-					<span class="chat-panel__session-name">${escapeHtml(this.t("chat.newChat"))}</span>
+					<span class="chat-panel__session-name">${escapeHtml(this.t("chat.currentChat"))}</span>
 				</span>
 				<span class="chat-panel__session-toggle-side">
 					<svg class="chat-panel__session-toggle-chevron" aria-hidden="true"><use xlink:href="#iconDown"></use></svg>
@@ -178,10 +188,20 @@ export class ChatPanel implements ChatPanelHost {
 			<span class="chat-panel__session-action chat-panel__clear block__icon block__icon--show b3-tooltips b3-tooltips__sw" aria-label="${escapeHtml(this.t("chat.clear"))}">
 				<svg style="width:16px;height:16px"><use xlink:href="#iconTrashcan"></use></svg>
 			</span>
+			<span class="chat-panel__session-action chat-panel__settings-entry block__icon block__icon--show b3-tooltips b3-tooltips__sw" aria-label="${escapeHtml(this.t("chat.view.settings"))}">
+				<svg style="width:16px;height:16px"><use xlink:href="#iconSettings"></use></svg>
+			</span>
 		</div>
 		<div class="chat-panel__session-list fn__none"></div>
 		<div class="chat-panel__context-bar fn__none"></div>
 		<div class="chat-panel__messages fn__flex-1"></div>
+	</div>
+	<div class="chat-panel__view-header fn__none">
+		<button class="chat-panel__view-back b3-button b3-button--text" type="button">
+			<svg class="chat-panel__view-back-icon" aria-hidden="true"><use xlink:href="#iconLeft"></use></svg>
+			<span>${escapeHtml(this.t("chat.view.back"))}</span>
+		</button>
+		<span class="chat-panel__view-title"></span>
 	</div>
 	<div class="chat-panel__tasks-view fn__none">
 		<div class="chat-panel__tasks-header"></div>
@@ -195,27 +215,49 @@ export class ChatPanel implements ChatPanelHost {
 	<div class="chat-panel__bottom-bar">
 		<div class="chat-panel__composer-body">
 			<div class="chat-panel__input">
-				<textarea class="chat-panel__textarea b3-text-field" rows="2" placeholder="${escapeHtml(this.t("chat.placeholder"))}"></textarea>
+				<textarea class="chat-panel__textarea" rows="2" placeholder="${escapeHtml(this.t("chat.placeholder"))}"></textarea>
 			</div>
 		</div>
 		<div class="chat-panel__bottom-footer">
-			<div class="chat-panel__view-switcher" role="tablist" aria-label="${escapeHtml(this.t("chat.viewSwitcher"))}">
-				<button class="chat-panel__switch-btn chat-panel__switch-btn--active" type="button" data-view="chat">${escapeHtml(this.t("chat.view.chat"))}</button>
-				<button class="chat-panel__switch-btn" type="button" data-view="tasks">${escapeHtml(this.t("chat.view.tasks"))}</button>
-				<button class="chat-panel__switch-btn" type="button" data-view="settings">${escapeHtml(this.t("chat.view.settings"))}</button>
+			<div class="chat-panel__footer-chat">
+				<div class="chat-panel__composer-tools">
+					<button class="chat-panel__plus-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-label="${escapeHtml(this.t("chat.composerMenu"))}" title="${escapeHtml(this.t("chat.composerMenu"))}">
+						<svg class="chat-panel__plus-icon" aria-hidden="true"><use xlink:href="#iconAdd"></use></svg>
+					</button>
+					<div class="chat-panel__plus-menu fn__none">
+						<button class="chat-panel__plus-menu-item" type="button" data-action="open-automations">
+							<svg class="chat-panel__plus-menu-icon" aria-hidden="true"><use xlink:href="#iconClock"></use></svg>
+							<span>${escapeHtml(this.t("chat.view.tasks"))}</span>
+						</button>
+					</div>
+				</div>
+				<span class="fn__flex-1"></span>
+				<div class="chat-panel__actions">
+					<div class="chat-panel__model-picker">
+						<button class="chat-panel__model-picker-btn" type="button" title="${escapeHtml(this.t("chat.reasoning.control"))}" aria-label="${escapeHtml(this.t("chat.reasoning.control"))}" aria-expanded="false">
+							<span class="chat-panel__model-picker-model">Model</span>
+							<span class="chat-panel__model-picker-reasoning">${escapeHtml(this.t("chat.reasoning.default"))}</span>
+							<svg class="chat-panel__model-picker-chevron" aria-hidden="true"><use xlink:href="#iconDown"></use></svg>
+						</button>
+						<div class="chat-panel__model-picker-menu fn__none"></div>
+					</div>
+					<button class="chat-panel__send" type="button" title="${escapeHtml(this.t("chat.sendTitle"))}" aria-label="${escapeHtml(this.t("chat.send"))}">
+						${this.getSendIconMarkup()}
+					</button>
+				</div>
 			</div>
-			<div class="chat-panel__actions">
-				<div class="chat-panel__model-picker">
-					<button class="chat-panel__model-picker-btn" type="button" title="${escapeHtml(this.t("chat.reasoning.control"))}" aria-label="${escapeHtml(this.t("chat.reasoning.control"))}" aria-expanded="false">
-						<span class="chat-panel__model-picker-model">Model</span>
-						<span class="chat-panel__model-picker-reasoning">${escapeHtml(this.t("chat.reasoning.default"))}</span>
+			<div class="chat-panel__footer-automation fn__none">
+				<div class="chat-panel__sched">
+					<button class="chat-panel__sched-btn" type="button" aria-haspopup="true" aria-expanded="false">
+						<svg class="chat-panel__sched-icon" aria-hidden="true"><use xlink:href="#iconClock"></use></svg>
+						<span class="chat-panel__sched-label"></span>
 						<svg class="chat-panel__model-picker-chevron" aria-hidden="true"><use xlink:href="#iconDown"></use></svg>
 					</button>
-					<div class="chat-panel__model-picker-menu fn__none"></div>
+					<div class="chat-panel__sched-menu fn__none"></div>
 				</div>
-				<button class="chat-panel__send" type="button" title="${escapeHtml(this.t("chat.sendTitle"))}" aria-label="${escapeHtml(this.t("chat.send"))}">
-					${this.getSendIconMarkup()}
-				</button>
+				<span class="fn__flex-1"></span>
+				<button class="chat-panel__automation-cancel b3-button b3-button--text" type="button">${escapeHtml(this.t("common.cancel"))}</button>
+				<button class="chat-panel__automation-create b3-button" type="button">${escapeHtml(this.t("common.create"))}</button>
 			</div>
 		</div>
 	</div>
@@ -237,6 +279,8 @@ export class ChatPanel implements ChatPanelHost {
 		this.modelPickerBtn = this.container.querySelector(".chat-panel__model-picker-btn");
 		this.modelPickerMenuEl = this.container.querySelector(".chat-panel__model-picker-menu");
 		this.contextBar = this.container.querySelector(".chat-panel__context-bar");
+		this.viewHeaderEl = this.container.querySelector(".chat-panel__view-header");
+		this.viewTitleEl = this.container.querySelector(".chat-panel__view-title");
 		this.applyEditorFontFamily();
 
 		// Create delegates
@@ -261,12 +305,34 @@ export class ChatPanel implements ChatPanelHost {
 			host: this,
 		});
 
-		/* Bottom view switching */
-		this.bottomBarEl.querySelectorAll<HTMLElement>("[data-view]").forEach((button) => {
-			button.addEventListener("click", () => {
-				const view = button.dataset.view;
-				this.setCurrentView(view === "tasks" || view === "settings" ? view : "chat");
-			});
+		/* Settings gear (session bar) + back button (non-chat view header) */
+		this.container.querySelector(".chat-panel__settings-entry")?.addEventListener("click", () => {
+			this.setCurrentView("settings");
+		});
+		this.container.querySelector(".chat-panel__view-back")?.addEventListener("click", () => {
+			this.setCurrentView("chat");
+		});
+
+		/* Composer "+" tools menu (left of the composer): Automations, etc. */
+		this.container.querySelector(".chat-panel__plus-btn")?.addEventListener("click", (event) => {
+			event.stopPropagation();
+			this.togglePlusMenu();
+		});
+		this.container.querySelector("[data-action='open-automations']")?.addEventListener("click", () => {
+			this.closePlusMenu();
+			this.enterAutomationMode();
+		});
+
+		/* Inline automation creation controls */
+		this.container.querySelector(".chat-panel__automation-cancel")?.addEventListener("click", () => {
+			this.exitAutomationMode();
+		});
+		this.container.querySelector(".chat-panel__automation-create")?.addEventListener("click", () => {
+			void this.createAutomationFromComposer();
+		});
+		this.container.querySelector(".chat-panel__sched-btn")?.addEventListener("click", (event) => {
+			event.stopPropagation();
+			this.toggleSchedMenu();
 		});
 
 		/* Auto-scroll detection */
@@ -312,7 +378,11 @@ export class ChatPanel implements ChatPanelHost {
 			}
 			if (shouldSendComposerOnKeydown(e)) {
 				e.preventDefault();
-				this.send();
+				if (this.composerMode === "automation") {
+					void this.createAutomationFromComposer();
+				} else {
+					this.send();
+				}
 			}
 			/* Escape to stop generation */
 			if (e.key === "Escape" && this.abortCtrl) {
@@ -413,6 +483,174 @@ export class ChatPanel implements ChatPanelHost {
 		this.modelPickerBtn?.classList.remove("chat-panel__model-picker-btn--open");
 		this.modelPickerBtn?.setAttribute("aria-expanded", "false");
 		this.modelPickerMenuEl?.classList.add("fn__none");
+	}
+
+	private togglePlusMenu(): void {
+		const menu = this.container.querySelector<HTMLElement>(".chat-panel__plus-menu");
+		const btn = this.container.querySelector<HTMLElement>(".chat-panel__plus-btn");
+		if (!menu) return;
+		const open = menu.classList.contains("fn__none");
+		menu.classList.toggle("fn__none", !open);
+		btn?.setAttribute("aria-expanded", String(open));
+	}
+
+	private closePlusMenu(): void {
+		this.container.querySelector(".chat-panel__plus-menu")?.classList.add("fn__none");
+		this.container.querySelector(".chat-panel__plus-btn")?.setAttribute("aria-expanded", "false");
+	}
+
+	/* ── Inline automation creation (composer "automation" mode) ─────────── */
+
+	private enterAutomationMode(): void {
+		this.composerMode = "automation";
+		this.automationForm = { preset: "daily", time: DEFAULT_TIME, weekday: 1, cron: "", triggerAt: undefined };
+		this.container.querySelector(".chat-panel__footer-chat")?.classList.add("fn__none");
+		this.container.querySelector(".chat-panel__footer-automation")?.classList.remove("fn__none");
+		this.closeModelPicker();
+		this.updateSchedLabel();
+		this.textareaEl.placeholder = this.t("automation.composerPlaceholder");
+		this.textareaEl.focus();
+	}
+
+	private exitAutomationMode(): void {
+		this.composerMode = "chat";
+		this.closeSchedMenu();
+		this.container.querySelector(".chat-panel__footer-automation")?.classList.add("fn__none");
+		this.container.querySelector(".chat-panel__footer-chat")?.classList.remove("fn__none");
+		this.updateComposerPlaceholder();
+	}
+
+	private async createAutomationFromComposer(): Promise<void> {
+		const prompt = this.textareaEl.value.trim();
+		if (!prompt) {
+			showMessage(this.t("automation.emptyPrompt"));
+			this.textareaEl.focus();
+			return;
+		}
+		const spec = presetToSchedule(this.automationForm);
+		if (this.automationForm.preset === "once" && !spec.triggerAt) {
+			showMessage(this.t("automation.needTime"));
+			return;
+		}
+		if (this.automationForm.preset === "custom" && !spec.cron) {
+			showMessage(this.t("automation.needCron"));
+			return;
+		}
+		const firstLine = prompt.split("\n").map((l) => l.trim()).find(Boolean) || this.t("tasks.untitled");
+		const title = firstLine.length > 40 ? `${firstLine.slice(0, 39)}…` : firstLine;
+		try {
+			const session = await this.taskManager.createTask({
+				title,
+				prompt,
+				scheduleType: spec.scheduleType,
+				cron: spec.cron || undefined,
+				triggerAt: spec.triggerAt,
+				timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+				enabled: true,
+			});
+			this.textareaEl.value = "";
+			this.resizeComposer();
+			this.exitAutomationMode();
+			showMessage(this.t("automation.created", { title }));
+			/* Jump to the automations list with the new one selected. */
+			this.tasksView.selectedTaskId = session?.id ?? null;
+			this.setCurrentView("tasks");
+		} catch (error) {
+			showMessage(this.t("chat.error.prefix", { message: localizeErrorMessage(error, this.i18n) }));
+		}
+	}
+
+	private toggleSchedMenu(): void {
+		const menu = this.container.querySelector<HTMLElement>(".chat-panel__sched-menu");
+		if (!menu) return;
+		if (menu.classList.contains("fn__none")) {
+			this.renderSchedMenu();
+			menu.classList.remove("fn__none");
+			this.container.querySelector(".chat-panel__sched-btn")?.setAttribute("aria-expanded", "true");
+		} else {
+			this.closeSchedMenu();
+		}
+	}
+
+	private closeSchedMenu(): void {
+		this.container.querySelector(".chat-panel__sched-menu")?.classList.add("fn__none");
+		this.container.querySelector(".chat-panel__sched-btn")?.setAttribute("aria-expanded", "false");
+	}
+
+	private updateSchedLabel(): void {
+		const el = this.container.querySelector<HTMLElement>(".chat-panel__sched-label");
+		if (el) el.textContent = this.schedLabel();
+	}
+
+	/** Human label for the current automation schedule, e.g. "每天 09:00". */
+	private schedLabel(): string {
+		const f = this.automationForm;
+		switch (f.preset) {
+			case "daily": return this.t("tasks.scheduleFriendly.daily", { time: f.time });
+			case "weekdays": return this.t("tasks.scheduleFriendly.weekdays", { time: f.time });
+			case "weekly": return this.t("tasks.scheduleFriendly.weekly", { weekday: this.t(`tasks.weekday.${f.weekday}`), time: f.time });
+			case "once": return f.triggerAt ? new Date(f.triggerAt).toLocaleString() : this.t("tasks.preset.once");
+			default: return f.cron ? `Cron · ${f.cron}` : this.t("tasks.preset.custom");
+		}
+	}
+
+	private renderSchedMenu(): void {
+		const menu = this.container.querySelector<HTMLElement>(".chat-panel__sched-menu");
+		if (!menu) return;
+		const f = this.automationForm;
+		const presets: SchedulePreset[] = ["daily", "weekdays", "weekly", "once", "custom"];
+		const presetRows = presets.map((p) =>
+			`<button class="chat-panel__sched-item${f.preset === p ? " chat-panel__sched-item--active" : ""}" type="button" data-preset="${p}">
+				<span class="chat-panel__sched-item-check">${f.preset === p ? "✓" : ""}</span>
+				<span>${escapeHtml(this.t(`tasks.preset.${p}`))}</span>
+			</button>`).join("");
+
+		let field = "";
+		if (f.preset === "daily" || f.preset === "weekdays" || f.preset === "weekly") {
+			field += `<label class="chat-panel__sched-field"><span>${escapeHtml(this.t("tasks.editor.time"))}</span><input class="b3-text-field" type="time" data-field="time" value="${escapeHtml(f.time)}" /></label>`;
+		}
+		if (f.preset === "weekly") {
+			const opts = [0, 1, 2, 3, 4, 5, 6].map((d) => `<option value="${d}"${f.weekday === d ? " selected" : ""}>${escapeHtml(this.t(`tasks.weekday.${d}`))}</option>`).join("");
+			field += `<label class="chat-panel__sched-field"><span>${escapeHtml(this.t("tasks.editor.weekday"))}</span><select class="b3-select" data-field="weekday">${opts}</select></label>`;
+		}
+		if (f.preset === "once") {
+			const val = f.triggerAt ? this.toDatetimeLocalValue(f.triggerAt) : "";
+			field += `<label class="chat-panel__sched-field"><span>${escapeHtml(this.t("tasks.editor.triggerAt"))}</span><input class="b3-text-field" type="datetime-local" data-field="triggerAt" value="${escapeHtml(val)}" /></label>`;
+		}
+		if (f.preset === "custom") {
+			field += `<label class="chat-panel__sched-field"><span>${escapeHtml(this.t("tasks.editor.cron"))}</span><input class="b3-text-field" data-field="cron" value="${escapeHtml(f.cron)}" placeholder="0 18 * * *" /></label>`;
+		}
+
+		menu.innerHTML = `<div class="chat-panel__sched-presets">${presetRows}</div>${field ? `<div class="chat-panel__sched-fields">${field}</div>` : ""}`;
+
+		menu.querySelectorAll<HTMLElement>("[data-preset]").forEach((btn) => {
+			btn.addEventListener("click", (e) => {
+				e.stopPropagation();
+				this.automationForm.preset = (btn.dataset.preset || "daily") as SchedulePreset;
+				this.updateSchedLabel();
+				this.renderSchedMenu();
+			});
+		});
+		menu.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-field]").forEach((input) => {
+			const handler = () => {
+				const field = (input as HTMLElement).dataset.field;
+				if (field === "time") this.automationForm.time = input.value || DEFAULT_TIME;
+				else if (field === "weekday") this.automationForm.weekday = Number.parseInt(input.value, 10) || 0;
+				else if (field === "cron") this.automationForm.cron = input.value;
+				else if (field === "triggerAt") this.automationForm.triggerAt = input.value ? new Date(input.value).getTime() : undefined;
+				this.updateSchedLabel();
+			};
+			input.addEventListener("change", handler);
+			input.addEventListener("input", handler);
+			input.addEventListener("click", (e) => e.stopPropagation());
+		});
+	}
+
+	/** Epoch ms → local "YYYY-MM-DDTHH:MM" for datetime-local inputs. */
+	private toDatetimeLocalValue(ts: number): string {
+		const d = new Date(ts);
+		const pad = (n: number) => String(n).padStart(2, "0");
+		return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 	}
 
 	private async toggleModelPicker(): Promise<void> {
@@ -581,7 +819,7 @@ export class ChatPanel implements ChatPanelHost {
 		const entry = this.store.getSessionSummary(s.id);
 		const nameEl = this.container.querySelector(".chat-panel__session-name");
 		if (nameEl)
-			nameEl.textContent = entry?.title || this.t("chat.newChat");
+			nameEl.textContent = entry?.title || this.t("chat.currentChat");
 		this.updateSessionToggleState();
 		this.syncReasoningControl();
 		void this.refreshModelSelector();
@@ -936,7 +1174,7 @@ export class ChatPanel implements ChatPanelHost {
 				indexEntry.title = s.title;
 			}
 			const nameEl = this.container.querySelector(".chat-panel__session-name");
-			if (nameEl) nameEl.textContent = s.title || this.t("chat.newChat");
+			if (nameEl) nameEl.textContent = s.title || this.t("chat.currentChat");
 			await this.store.saveSession(s);
 			this.refreshSessionListUi();
 
@@ -1782,6 +2020,7 @@ export class ChatPanel implements ChatPanelHost {
 	}
 
 	private updateComposerPlaceholder(): void {
+		if (this.composerMode === "automation") return; // fixed placeholder while creating an automation
 		const placeholders = this.getComposerPlaceholders();
 		this.textareaEl.placeholder = placeholders[this.placeholderIndex % placeholders.length] || this.t("chat.placeholder");
 	}
@@ -1863,19 +2102,26 @@ export class ChatPanel implements ChatPanelHost {
 	}
 
 	private setCurrentView(view: "chat" | "tasks" | "settings"): void {
+		if (view !== "chat" && this.composerMode === "automation") this.exitAutomationMode();
 		this.currentView = view;
 		this.chatViewEl.classList.toggle("fn__none", view !== "chat");
 		this.tasksViewEl.classList.toggle("fn__none", view !== "tasks");
 		this.settingsViewEl.classList.toggle("fn__none", view !== "settings");
 		this.todosDockEl.classList.toggle("fn__none", view !== "chat" || !this.todosDockEl.querySelector(".chat-todos-bar"));
 		this.bottomBarEl.classList.toggle("chat-panel__bottom-bar--chat", view === "chat");
+		/* The composer card belongs to chat only — hide it entirely elsewhere. */
+		this.bottomBarEl.classList.toggle("fn__none", view !== "chat");
 		this.composerBodyEl.classList.toggle("chat-panel__composer-body--collapsed", view !== "chat");
 		this.modelPickerEl.classList.toggle("fn__none", view !== "chat");
 		if (view !== "chat") this.closeModelPicker();
-		this.bottomBarEl.querySelectorAll<HTMLElement>("[data-view]").forEach((button) => {
-			button.classList.toggle("chat-panel__switch-btn--active", button.dataset.view === view);
-			button.setAttribute("aria-selected", String(button.dataset.view === view));
-		});
+		/* Non-chat views show a back/title header; chat hides it. */
+		this.viewHeaderEl.classList.toggle("fn__none", view === "chat");
+		if (view !== "chat") {
+			this.viewTitleEl.textContent = this.t(view === "tasks" ? "chat.view.tasks" : "chat.view.settings");
+			/* Leaving chat: close the session dropdown if open. */
+			this.sessionListEl.classList.add("fn__none");
+			this.updateSessionToggleState();
+		}
 		if (view === "tasks") {
 			void this.tasksView.render();
 		} else if (view === "settings") {
@@ -1999,7 +2245,7 @@ export class ChatPanel implements ChatPanelHost {
 
 	private async handleConfigSaved(nextConfig: AgentConfig): Promise<void> {
 		const pluginAny = this.plugin as Plugin & {
-			mcpManager?: { connectAll?: (servers: McpServerConfig[]) => Promise<unknown>; getAllTools?: () => StructuredToolInterface[] };
+			mcpManager?: { connectAll?: (servers: McpServerConfig[]) => Promise<unknown>; getAllTools?: () => AgentTool[] };
 		};
 		await pluginAny.mcpManager?.connectAll?.((nextConfig.mcpServers || []).filter((item) => item.enabled));
 		this.tools = [

@@ -1,5 +1,6 @@
 import { HumanMessage } from "@langchain/core/messages";
-import { tool, type StructuredToolInterface, type ToolRuntime } from "@langchain/core/tools";
+import { tool, type ToolRuntime } from "@langchain/core/tools";
+import type { AgentTool } from "./agent-types";
 import type { ZodTypeAny } from "zod";
 import { makeAgent, fetchGuideDoc, type MakeAgentOptions } from "./agent";
 import { messageKind, messageContent } from "./message-shape";
@@ -20,11 +21,11 @@ type AgentLike = {
 	invoke: (input: { messages: HumanMessage[] }, options?: Record<string, unknown>) => Promise<any>;
 };
 
-type ToolsetResolver = StructuredToolInterface[] | (() => StructuredToolInterface[]);
+type ToolsetResolver = AgentTool[] | (() => AgentTool[]);
 
 type CreateAgentFn = (
 	config: AgentConfig,
-	tools: StructuredToolInterface[],
+	tools: AgentTool[],
 	opts?: MakeAgentOptions,
 ) => AgentLike | Promise<AgentLike>;
 
@@ -43,7 +44,7 @@ export interface SubAgentToolOptions<TSchema extends ZodTypeAny = ZodTypeAny> {
 	guideContent?: string;
 }
 
-function resolveToolset(toolset: ToolsetResolver): StructuredToolInterface[] {
+function resolveToolset(toolset: ToolsetResolver): AgentTool[] {
 	return typeof toolset === "function" ? toolset() : toolset;
 }
 
@@ -125,7 +126,7 @@ export async function invokeSubAgentSafe<TSchema extends ZodTypeAny>(
 
 export function createSubAgentTool<TSchema extends ZodTypeAny>(
 	options: SubAgentToolOptions<TSchema>,
-): StructuredToolInterface {
+): AgentTool {
 	return tool(
 		async (input: unknown, runtime: ToolRuntime) => invokeSubAgentSafe(options, input, runtime),
 		{

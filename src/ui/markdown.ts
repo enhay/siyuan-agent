@@ -34,6 +34,7 @@ export function renderMarkdown(src: string): string {
 		const line = lines[i];
 
 		/* Code block placeholder — pass through */
+		// eslint-disable-next-line no-control-regex -- \x00 is an intentional private sentinel (inserted above)
 		if (/\x00CODEBLOCK\d+\x00/.test(line)) {
 			closeList();
 			closeBlockquote();
@@ -135,6 +136,7 @@ export function renderMarkdown(src: string): string {
 	let result = out.join("\n");
 
 	/* Restore code blocks */
+	// eslint-disable-next-line no-control-regex -- \x00 is an intentional private sentinel (inserted above)
 	result = result.replace(/\x00CODEBLOCK(\d+)\x00/g, (_, idx) => {
 		return codeBlocks[parseInt(idx, 10)];
 	});
@@ -181,6 +183,7 @@ function inlineFormat(text: string): string {
 	text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
 
 	/* Restore inline code */
+	// eslint-disable-next-line no-control-regex -- \x01 is an intentional private sentinel (inserted above)
 	text = text.replace(/\x01IC(\d+)\x01/g, (_, idx) => codes[parseInt(idx, 10)]);
 
 	return text;

@@ -1,5 +1,5 @@
 import { HumanMessage } from "@langchain/core/messages";
-import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import type { AgentModel } from "./agent-types";
 import type { AgentState, CompactionState } from "../types";
 import { messageKind, messageContent } from "./message-shape";
 
@@ -86,7 +86,7 @@ function turnsToText(turns: any[][]): string {
 
 export interface CompactOptions {
 	/** The LLM used for summarisation. */
-	model: BaseChatModel;
+	model: AgentModel;
 	/** How many recent turns to keep verbatim. */
 	keepRecentTurns?: number;
 	/** Extra requirement text from `/compact [text]`. */
