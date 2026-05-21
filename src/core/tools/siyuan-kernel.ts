@@ -110,7 +110,12 @@ export function makeKernel(fetch: KernelFetcher = siyuanFetch): SiyuanKernel {
 		search: {
 			fullText: (req) => fetch("/api/search/fullTextSearchBlock", req),
 		},
-		sql: (stmt) => fetch("/api/query/sql", { stmt }),
+		sql: async (stmt) => {
+			// /api/query/sql returns `data: null` when there are no rows — normalize
+			// to [] so callers can always .find/.some/.map safely.
+			const d = await fetch("/api/query/sql", { stmt });
+			return Array.isArray(d) ? d : [];
+		},
 	};
 }
 
