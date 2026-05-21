@@ -1,15 +1,16 @@
 import { tool, ToolRuntime } from "@langchain/core/tools";
 import { z } from "zod";
-import { siyuanFetch, emitActivity, sqlEscape } from "./siyuan-api";
+import { emitActivity } from "./siyuan-api";
+import { kernel, sqlValue } from "./siyuan-kernel";
 import { defaultTranslator, type Translator } from "../../i18n";
 
 export function createGetDocumentTool(i18n: Translator = defaultTranslator) {
 return tool(
 	async ({ id }, runtime: ToolRuntime) => {
-		const docInfo = await siyuanFetch("/api/query/sql", {
-			stmt: `SELECT id, content, hpath FROM blocks WHERE id='${sqlEscape(id)}' LIMIT 1`,
-		});
-		const data = await siyuanFetch("/api/export/exportMdContent", { id });
+		const docInfo = await kernel.sql(
+			`SELECT id, content, hpath FROM blocks WHERE id=${sqlValue(id)} LIMIT 1`,
+		);
+		const data = await kernel.exportApi.mdContent(id);
 		const hpath = data.hPath || "";
 		const content = data.content || "";
 		const label = docInfo?.[0]?.content || hpath || id;
@@ -37,10 +38,10 @@ return tool(
 export function createGetDocumentBlocksTool(i18n: Translator = defaultTranslator) {
 return tool(
 	async ({ id }, runtime: ToolRuntime) => {
-		const docInfo = await siyuanFetch("/api/query/sql", {
-			stmt: `SELECT id, hpath FROM blocks WHERE id='${sqlEscape(id)}' LIMIT 1`,
-		});
-		const data = await siyuanFetch("/api/block/getChildBlocks", { id });
+		const docInfo = await kernel.sql(
+			`SELECT id, hpath FROM blocks WHERE id=${sqlValue(id)} LIMIT 1`,
+		);
+		const data = await kernel.blocks.getChildren(id);
 		const blocks = (data || []).map((b: any) => ({
 			id: b.id,
 			type: b.type,
@@ -71,8 +72,8 @@ return tool(
 export function createGetDocumentOutlineTool(i18n: Translator = defaultTranslator) {
 return tool(
 	async ({ id }, runtime: ToolRuntime) => {
-		const stmt = `SELECT id, content, subtype, sort FROM blocks WHERE root_id='${sqlEscape(id)}' AND type='h' ORDER BY sort ASC LIMIT 200`;
-		const data = await siyuanFetch("/api/query/sql", { stmt });
+		const stmt = `SELECT id, content, subtype, sort FROM blocks WHERE root_id=${sqlValue(id)} AND type='h' ORDER BY sort ASC LIMIT 200`;
+		const data = await kernel.sql(stmt);
 		const headings = (data || []).map((row: any) => ({
 			id: row.id,
 			title: row.content,
@@ -99,14 +100,14 @@ return tool(
 export function createReadBlockTool(i18n: Translator = defaultTranslator) {
 return tool(
 	async ({ id }, runtime: ToolRuntime) => {
-		const kramdowns: Record<string, string> = await siyuanFetch("/api/block/getBlockKramdowns", { ids: [id] });
+		const kramdowns: Record<string, string> = await kernel.blocks.getKramdowns([id]);
 		const content = kramdowns?.[id];
 		if (!content) {
 			return JSON.stringify({ error: i18n.t("tool.error.blockNotFound", { id }) });
 		}
-		const blockInfo = await siyuanFetch("/api/query/sql", {
-			stmt: `SELECT id, type, subtype, root_id, parent_id, content, hpath FROM blocks WHERE id='${sqlEscape(id)}' LIMIT 1`,
-		});
+		const blockInfo = await kernel.sql(
+			`SELECT id, type, subtype, root_id, parent_id, content, hpath FROM blocks WHERE id=${sqlValue(id)} LIMIT 1`,
+		);
 		const info = blockInfo?.[0] || {};
 		emitActivity(runtime, {
 			category: "lookup",
@@ -136,7 +137,7 @@ return tool(
 export function createSearchFulltextTool(i18n: Translator = defaultTranslator) {
 return tool(
 	async ({ query, page }, runtime: ToolRuntime) => {
-		const data = await siyuanFetch("/api/search/fullTextSearchBlock", {
+		const data = await kernel.search.fullText({
 			query,
 			page: page || 1,
 			pageSize: 10,
@@ -179,11 +180,11 @@ return tool(
 export function createSearchDocumentsTool(i18n: Translator = defaultTranslator) {
 return tool(
 	async ({ keyword, notebook }, runtime: ToolRuntime) => {
-		const safeKeyword = sqlEscape(keyword);
+		const likePattern = sqlValue(`%${keyword}%`);
 		const stmt = notebook
-			? `SELECT id, content, hpath, box, updated FROM blocks WHERE type='d' AND box='${sqlEscape(notebook)}' AND content LIKE '%${safeKeyword}%' ORDER BY updated DESC LIMIT 50`
-			: `SELECT id, content, hpath, box, updated FROM blocks WHERE type='d' AND content LIKE '%${safeKeyword}%' ORDER BY updated DESC LIMIT 50`;
-		const data = await siyuanFetch("/api/query/sql", { stmt });
+			? `SELECT id, content, hpath, box, updated FROM blocks WHERE type='d' AND box=${sqlValue(notebook)} AND content LIKE ${likePattern} ORDER BY updated DESC LIMIT 50`
+			: `SELECT id, content, hpath, box, updated FROM blocks WHERE type='d' AND content LIKE ${likePattern} ORDER BY updated DESC LIMIT 50`;
+		const data = await kernel.sql(stmt);
 		const docs = (data || []).map((d: any) => ({
 			id: d.id,
 			title: d.content,

@@ -1,9 +1,20 @@
 import { HumanMessage } from "@langchain/core/messages";
 import { tool, type StructuredToolInterface, type ToolRuntime } from "@langchain/core/tools";
 import type { ZodTypeAny } from "zod";
-import { makeAgent } from "./agent";
-import { resolveSubAgentModelConfig, type AgentConfig, type ModelConfig } from "../types";
+import { makeAgent, fetchGuideDoc, type MakeAgentOptions } from "./agent";
+import { messageKind, messageContent } from "./message-shape";
+import { resolveSubAgentModelConfig, type AgentConfig } from "../types";
 import { defaultTranslator, localizeErrorMessage, type Translator } from "../i18n";
+
+function resolveGuideContent(
+	options: { guideContent?: string },
+	config: AgentConfig,
+): string | Promise<string> {
+	if (options.guideContent !== undefined) return options.guideContent;
+	const docId = config.guideDoc?.id;
+	if (!docId) return "";
+	return fetchGuideDoc(docId);
+}
 
 type AgentLike = {
 	invoke: (input: { messages: HumanMessage[] }, options?: Record<string, unknown>) => Promise<any>;
@@ -14,10 +25,8 @@ type ToolsetResolver = StructuredToolInterface[] | (() => StructuredToolInterfac
 type CreateAgentFn = (
 	config: AgentConfig,
 	tools: StructuredToolInterface[],
-	extraSystemPrompt?: string | null,
-	modelOverride?: ModelConfig | null,
-	i18n?: Translator,
-) => Promise<AgentLike>;
+	opts?: MakeAgentOptions,
+) => AgentLike | Promise<AgentLike>;
 
 export interface SubAgentToolOptions<TSchema extends ZodTypeAny = ZodTypeAny> {
 	name: string;
@@ -30,26 +39,12 @@ export interface SubAgentToolOptions<TSchema extends ZodTypeAny = ZodTypeAny> {
 	recursionLimit?: number;
 	createAgent?: CreateAgentFn;
 	i18n?: Translator;
+	/** Guide doc body already fetched by the parent; reused so the sub-agent never re-fetches. */
+	guideContent?: string;
 }
 
 function resolveToolset(toolset: ToolsetResolver): StructuredToolInterface[] {
 	return typeof toolset === "function" ? toolset() : toolset;
-}
-
-function getMessageType(message: any): string {
-	if (typeof message?._getType === "function") return message._getType();
-	if (message?.lc === 1 && Array.isArray(message.id)) {
-		const className = message.id[message.id.length - 1] as string;
-		if (className === "AIMessage" || className === "AIMessageChunk") return "ai";
-		if (className === "HumanMessage") return "human";
-		if (className === "ToolMessage") return "tool";
-	}
-	return String(message?.type ?? message?.role ?? "");
-}
-
-function getMessageContent(message: any): string | null {
-	const content = message?.kwargs?.content ?? message?.content;
-	return typeof content === "string" ? content : null;
 }
 
 function inputToPrompt(input: unknown): string {
@@ -64,9 +59,9 @@ function inputToPrompt(input: unknown): string {
 export function extractLastAiMessageContent(result: any): string {
 	const messages = Array.isArray(result?.messages) ? result.messages : [];
 	for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
-		if (getMessageType(messages[idx]) !== "ai") continue;
-		const content = getMessageContent(messages[idx]);
-		if (content !== null) return content;
+		if (messageKind(messages[idx]) !== "ai") continue;
+		const content = messageContent(messages[idx]);
+		if (content) return content;
 	}
 	return defaultTranslator.t("subAgent.noFinal");
 }
@@ -84,9 +79,13 @@ export async function invokeSubAgent<TSchema extends ZodTypeAny>(
 	const childTools = resolveToolset(options.toolset)
 		.filter((toolDef) => toolDef.name !== options.name);
 	const i18n = options.i18n || defaultTranslator;
-	const childAgent = options.i18n
-		? await createChildAgent(config, childTools, options.systemPrompt, subAgentModel, i18n)
-		: await createChildAgent(config, childTools, options.systemPrompt, subAgentModel);
+	const guideContent = await resolveGuideContent(options, config);
+	const childAgent = await createChildAgent(config, childTools, {
+		extraSystemPrompt: options.systemPrompt,
+		modelOverride: subAgentModel,
+		i18n,
+		guideContent,
+	});
 	const prompt = inputToPrompt(input);
 	const invokeOptions: Record<string, unknown> = {
 		recursionLimit,

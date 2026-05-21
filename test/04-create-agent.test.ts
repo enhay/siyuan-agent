@@ -6,13 +6,11 @@ import { tool, ToolRuntime } from "@langchain/core/tools";
 import { z } from "zod";
 import {
   HumanMessage,
-  AIMessage,
-  SystemMessage,
-  ToolMessage,
   BaseMessage,
 } from "@langchain/core/messages";
 import * as fs from "fs";
 import * as path from "path";
+import { messagesFromDict } from "../src/core/message-shape";
 
 const hasOpenAICredentials = Boolean(
 	process.env.OPENAI_API_KEY
@@ -30,37 +28,6 @@ const describeOpenAI = hasOpenAICredentials ? describe : describe.skip;
 const describeLangSmith = hasLangSmithCredentials ? describe : describe.skip;
 
 // ─────────────────────── Session Helpers ───────────────────────
-
-/**
- * 将 LangChain JS 序列化的单条消息 dict 还原为 BaseMessage 实例。
- * JS 序列化格式: { lc:1, type:"constructor", id:[...path, ClassName], kwargs:{...} }
- */
-function messageFromDict(raw: Record<string, any>): BaseMessage {
-  // LangChain JS 序列化格式
-  if (raw.lc === 1 && raw.type === "constructor" && Array.isArray(raw.id)) {
-    const className = raw.id[raw.id.length - 1] as string;
-    const kwargs = raw.kwargs ?? {};
-    if (className === "HumanMessage")  return new HumanMessage(kwargs);
-    if (className === "AIMessage")     return new AIMessage(kwargs);
-    if (className === "AIMessageChunk") return new AIMessage(kwargs); // 当普通对话历史用
-    if (className === "SystemMessage") return new SystemMessage(kwargs);
-    if (className === "ToolMessage")   return new ToolMessage({ tool_call_id: "", ...kwargs });
-    throw new Error(`Unknown LangChain message class: ${className}`);
-  }
-
-  // 兜底: Python 风格 { type: "human"|"ai"|... , content, ... }
-  const { type, ...rest } = raw;
-  if (type === "human")  return new HumanMessage(rest);
-  if (type === "ai")     return new AIMessage(rest);
-  if (type === "system") return new SystemMessage(rest);
-  if (type === "tool")   return new ToolMessage({ tool_call_id: "", ...rest });
-  throw new Error(`Unknown message type: ${type}`);
-}
-
-/** 反序列化消息列表 */
-function messagesFromDict(messages: Record<string, any>[]): BaseMessage[] {
-  return messages.map(messageFromDict);
-}
 
 /**
  * 合并已保存的 session state 与新的用户输入。

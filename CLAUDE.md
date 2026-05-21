@@ -41,7 +41,7 @@ SiYuan Agent — AI assistant plugin for the SiYuan note-taking app. LangChain a
 | Scheduling | `create/list/update/delete_scheduled_task` |
 | Meta | `explore_notes` (sub-agent with own lookup toolset) |
 
-`delete_document` is exported but **not registered** (safety). Import and register manually if needed.
+`delete_document` deletes a whole document subtree and is **not undoable in-app** (recovery only via SiYuan Data History). It is registered **interactive-chat only**, opted in via `getDefaultTools(..., { includeDeleteDocument: true })` (see `chat-panel.ts` / `index.ts` `getInteractiveTools`). The autonomous **scheduled-task** toolset omits it — no user is present to confirm a deletion. The system prompt classifies it as a high-impact op requiring confirmation before use.
 
 ### UI (`src/ui/`)
 - **`chat-panel.ts`** (74KB): Main orchestrator, delegate pattern → `SettingsView`, `TasksView`, `Autocomplete`
@@ -97,3 +97,17 @@ editorCallback: (protyle) => {
 }
 ```
 Right-click menu: use `open-menu-content` event's `e.detail.range`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as local markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default canonical strings: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.

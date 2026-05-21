@@ -1,7 +1,8 @@
 import { tool, ToolRuntime } from "@langchain/core/tools";
 import { z } from "zod";
 import { openTab } from "siyuan";
-import { siyuanFetch, emitActivity, sqlEscape } from "./siyuan-api";
+import { emitActivity } from "./siyuan-api";
+import { kernel, sqlValue } from "./siyuan-kernel";
 import { defaultTranslator, type Translator } from "../../i18n";
 
 function extractOperationBlockIds(data: any): string[] {
@@ -22,8 +23,8 @@ export function createEditBlocksTool(i18n: Translator = defaultTranslator) {
 return tool(
 	async ({ blocks }, runtime: ToolRuntime) => {
 		const ids = blocks.map((b: { id: string }) => b.id);
-		const originals: Record<string, string> = await siyuanFetch("/api/block/getBlockKramdowns", { ids });
-		const treeInfos: Record<string, any> = await siyuanFetch("/api/block/getBlockTreeInfos", { ids });
+		const originals: Record<string, string> = await kernel.blocks.getKramdowns(ids);
+		const treeInfos: Record<string, any> = await kernel.blocks.getTreeInfos(ids);
 
 		const results: any[] = [];
 
@@ -55,20 +56,18 @@ return tool(
 				let insertResult: any;
 
 				if (previousID) {
-					insertResult = await siyuanFetch("/api/block/insertBlock", {
+					insertResult = await kernel.blocks.insert({
 						data: block.content,
-						dataType: "markdown",
 						previousID,
 					});
 				} else {
-					insertResult = await siyuanFetch("/api/block/prependBlock", {
+					insertResult = await kernel.blocks.prepend({
 						data: block.content,
-						dataType: "markdown",
 						parentID,
 					});
 				}
 				const newIds = extractOperationBlockIds(insertResult);
-				await siyuanFetch("/api/block/deleteBlock", { id: block.id });
+				await kernel.blocks.delete(block.id);
 				results.push({
 					oldId: block.id,
 					newIds,
@@ -96,9 +95,9 @@ return tool(
 			)];
 			let path = "";
 			if (rootIDs.length > 0) {
-				const rootDoc = await siyuanFetch("/api/query/sql", {
-					stmt: `SELECT id, hpath FROM blocks WHERE id='${sqlEscape(rootIDs[0])}' LIMIT 1`,
-				});
+				const rootDoc = await kernel.sql(
+					`SELECT id, hpath FROM blocks WHERE id=${sqlValue(rootIDs[0])} LIMIT 1`,
+				);
 				path = rootDoc?.[0]?.hpath || "";
 			}
 			emitActivity(runtime, {
@@ -130,14 +129,13 @@ return tool(
 export function createAppendBlockTool(i18n: Translator = defaultTranslator) {
 return tool(
 	async ({ parentID, markdown }, runtime: ToolRuntime) => {
-		const data = await siyuanFetch("/api/block/appendBlock", {
+		const data = await kernel.blocks.append({
 			data: markdown,
-			dataType: "markdown",
 			parentID,
 		});
-		const docInfo = await siyuanFetch("/api/query/sql", {
-			stmt: `SELECT id, hpath FROM blocks WHERE id='${sqlEscape(parentID)}' LIMIT 1`,
-		});
+		const docInfo = await kernel.sql(
+			`SELECT id, hpath FROM blocks WHERE id=${sqlValue(parentID)} LIMIT 1`,
+		);
 		const blockIDs = Array.isArray(data)
 			? data.map((item: any) => item?.doOperations?.[0]?.id).filter(Boolean)
 			: [];
@@ -166,7 +164,7 @@ return tool(
 export function createCreateDocumentTool(i18n: Translator = defaultTranslator) {
 return tool(
 	async ({ notebook, path, markdown }, runtime: ToolRuntime) => {
-		const id = await siyuanFetch("/api/filetree/createDocWithMd", {
+		const id = await kernel.filetree.createDocWithMd({
 			notebook,
 			path,
 			markdown: markdown || "",
@@ -198,7 +196,7 @@ return tool(
 export function createMoveDocumentTool(i18n: Translator = defaultTranslator) {
 return tool(
 	async ({ fromIDs, toID }, runtime: ToolRuntime) => {
-		await siyuanFetch("/api/filetree/moveDocsByID", { fromIDs, toID });
+		await kernel.filetree.moveDocsByID(fromIDs, toID);
 		emitActivity(runtime, {
 			category: "change",
 			action: "move",
@@ -222,7 +220,7 @@ return tool(
 export function createRenameDocumentTool(i18n: Translator = defaultTranslator) {
 return tool(
 	async ({ id, title }, runtime: ToolRuntime) => {
-		await siyuanFetch("/api/filetree/renameDocByID", { id, title });
+		await kernel.filetree.renameDocByID(id, title);
 		emitActivity(runtime, {
 			category: "change",
 			action: "rename",
@@ -244,20 +242,40 @@ return tool(
 );
 }
 
-// deleteDocumentTool is intentionally NOT in defaultTools (safety) — export for opt-in use
-export const deleteDocumentTool = tool(
-	async ({ id }) => {
-		await siyuanFetch("/api/filetree/removeDocByID", { id });
-		return JSON.stringify({ ok: true, id });
+// High-impact and not undoable in-app — only registered in interactive chat
+// (via getDefaultTools opts), never in the autonomous scheduled-task toolset.
+export function createDeleteDocumentTool(i18n: Translator = defaultTranslator) {
+return tool(
+	async ({ id }, runtime: ToolRuntime) => {
+		// Best-effort: resolve a human-readable target before deleting so the
+		// activity card and the returned record name the doc, not just its ID.
+		let hPath = "";
+		try {
+			hPath = await kernel.filetree.getHPathByID(id);
+		} catch {
+			// Ignore: a bad/stale ID surfaces below when removeDocByID errors.
+		}
+		const title = hPath.split("/").filter(Boolean).pop() || id;
+		await kernel.filetree.removeDocByID(id);
+		emitActivity(runtime, {
+			category: "change",
+			action: "delete",
+			id,
+			label: title,
+			meta: i18n.t("tool.deleteDocument.meta"),
+		});
+		return JSON.stringify({ ok: true, id, title, path: hPath || undefined });
 	},
 	{
 		name: "delete_document",
-		description: "Permanently delete a document by its ID. This is irreversible.",
+		description:
+			"Delete a document and all of its sub-documents by ID. This removes the whole subtree and is NOT undoable in-app — recovery is only possible through SiYuan's Data History, if enabled. Confirm the exact target document with the user before calling this.",
 		schema: z.object({
-			id: z.string().describe("Document ID to delete"),
+			id: z.string().describe("Document ID to delete (its sub-documents are deleted too)"),
 		}),
 	}
 );
+}
 
 export const editBlocksTool = createEditBlocksTool();
 export const appendBlockTool = createAppendBlockTool();

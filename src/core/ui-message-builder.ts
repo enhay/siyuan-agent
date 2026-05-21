@@ -5,37 +5,7 @@ import type {
 	UiMessage,
 } from "../types";
 import { isToolMessageUi } from "../types";
-
-function genId(): string {
-	return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
-function msgType(m: any): string {
-	if (typeof m?._getType === "function") return m._getType();
-	if (m?.lc === 1 && Array.isArray(m.id)) {
-		const cls = m.id[m.id.length - 1] as string;
-		if (cls === "HumanMessage") return "human";
-		if (cls === "AIMessage" || cls === "AIMessageChunk") return "ai";
-		if (cls === "SystemMessage") return "system";
-		if (cls === "ToolMessage") return "tool";
-	}
-	return m?.type ?? m?.role ?? "";
-}
-
-function getMessageContent(m: any): string {
-	const content = m?.kwargs?.content ?? m?.content;
-	return typeof content === "string" ? content : "";
-}
-
-function getMessageToolCalls(m: any): any[] {
-	const tc = m?.kwargs?.tool_calls ?? m?.tool_calls;
-	return Array.isArray(tc) ? tc : [];
-}
-
-function getToolCallId(tc: any): string {
-	const id = tc?.id ?? tc?.tool_call_id;
-	return typeof id === "string" ? id : "";
-}
+import { messageKind, messageToolCalls, toolCallId } from "./message-shape";
 
 /**
  * Unified builder that maintains `messagesUi` during both streaming and
@@ -80,7 +50,7 @@ export class UiMessageBuilder {
 	pushOrUpdateAi(msg: Record<string, any>): void {
 		if (this.currentAiIndex !== null) {
 			const current = this.messages[this.currentAiIndex];
-			if (current && !isToolMessageUi(current) && msgType(current) === "ai") {
+			if (current && !isToolMessageUi(current) && messageKind(current) === "ai") {
 				this.messages[this.currentAiIndex] = msg;
 				return;
 			}
@@ -89,7 +59,7 @@ export class UiMessageBuilder {
 
 		const lastIndex = this.messages.length - 1;
 		const last = this.messages[lastIndex];
-		if (last && !isToolMessageUi(last) && msgType(last) === "ai") {
+		if (last && !isToolMessageUi(last) && messageKind(last) === "ai") {
 			this.messages[lastIndex] = msg;
 			this.currentAiIndex = lastIndex;
 			return;
@@ -161,11 +131,11 @@ export class UiMessageBuilder {
 		for (let i = 0; i < this.messages.length; i++) {
 			const m = this.messages[i];
 			if (isToolMessageUi(m)) continue;
-			if (msgType(m) !== "ai") continue;
+			if (messageKind(m) !== "ai") continue;
 
-			const toolCalls = getMessageToolCalls(m);
+			const toolCalls = messageToolCalls(m);
 			for (const tc of toolCalls) {
-				const tcId = getToolCallId(tc);
+				const tcId = toolCallId(tc);
 				if (!tcId || existing.has(tcId)) continue;
 				existing.add(tcId);
 				insertions.push({
@@ -218,7 +188,7 @@ export function migrateToMessagesUi(
 	}
 
 	for (const msg of messages || []) {
-		const type = msgType(msg);
+		const type = messageKind(msg);
 		if (type === "system") continue;
 
 		if (type === "human" || type === "user") {
@@ -228,9 +198,9 @@ export function migrateToMessagesUi(
 
 		if (type === "ai") {
 			builder.pushOrUpdateAi(msg);
-			const toolCalls = getMessageToolCalls(msg);
+			const toolCalls = messageToolCalls(msg);
 			for (const tc of toolCalls) {
-				const tcId = getToolCallId(tc);
+				const tcId = toolCallId(tc);
 				if (!tcId) continue;
 				builder.onToolCallStart(tc.name || "unknown", tcId);
 				const events = eventsByToolCallId.get(tcId) || [];

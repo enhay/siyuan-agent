@@ -7,12 +7,12 @@ import { defaultTranslator, type Translator } from "../../i18n";
 
 import { createListNotebooksTool, createListDocumentsTool, createRecentDocumentsTool } from "./notebook-tools";
 import { createGetDocumentTool, createGetDocumentBlocksTool, createGetDocumentOutlineTool, createReadBlockTool, createSearchFulltextTool, createSearchDocumentsTool } from "./document-tools";
-import { createEditBlocksTool, createAppendBlockTool, createCreateDocumentTool, createMoveDocumentTool, createRenameDocumentTool } from "./edit-tools";
+import { createEditBlocksTool, createAppendBlockTool, createCreateDocumentTool, createMoveDocumentTool, createRenameDocumentTool, createDeleteDocumentTool } from "./edit-tools";
 import { writeTodosTool } from "./plan-tools";
 import { createScheduledTaskTools } from "./scheduled-tools";
 
-export { deleteDocumentTool } from "./edit-tools";
-export { siyuanFetch, emitToolEvent, emitActivity, sqlEscape } from "./siyuan-api";
+export { createDeleteDocumentTool } from "./edit-tools";
+export { siyuanFetch, emitToolEvent, emitActivity } from "./siyuan-api";
 
 export function getLookupTools(): StructuredToolInterface[] {
 	return createLookupTools(defaultTranslator);
@@ -50,10 +50,19 @@ function createExploreNotesTool(
 	});
 }
 
+export interface DefaultToolsOptions {
+	/** Register delete_document. Off by default: it deletes a whole subtree and
+	 * is not undoable in-app, so only the interactive chat (where the agent can
+	 * confirm with the user) opts in. The autonomous scheduled-task toolset
+	 * leaves it out — no user is present to confirm a deletion. */
+	includeDeleteDocument?: boolean;
+}
+
 export function getDefaultTools(
 	getAgentConfig: () => AgentConfig | Promise<AgentConfig>,
 	getTaskManager: () => ScheduledTaskManager | null = () => null,
 	i18n: Translator = defaultTranslator,
+	opts: DefaultToolsOptions = {},
 ): StructuredToolInterface[] {
 	const scheduledTaskTools = createScheduledTaskTools(getTaskManager, i18n);
 	const defaultTools: StructuredToolInterface[] = [
@@ -77,7 +86,9 @@ export function getDefaultTools(
 		scheduledTaskTools.listScheduledTasksTool,
 		scheduledTaskTools.updateScheduledTaskTool,
 		scheduledTaskTools.deleteScheduledTaskTool,
-		// deleteDocumentTool is intentionally excluded for safety
 	];
+	if (opts.includeDeleteDocument) {
+		defaultTools.push(createDeleteDocumentTool(i18n));
+	}
 	return defaultTools;
 }

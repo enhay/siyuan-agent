@@ -1,4 +1,4 @@
-import { Plugin, showMessage, openTab } from "siyuan";
+import { Plugin, showMessage } from "siyuan";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import {
 	AgentConfig,
@@ -10,47 +10,52 @@ import {
 	ToolUIEvent,
 	ToolMessageUi,
 	UiMessage,
-	DEFAULT_CONFIG,
 	buildInitPrompt,
-	cloneModelServices,
-	genModelServiceId,
-	genModelId,
 	isToolMessageUi,
 	normalizeAgentConfig,
 	listConfiguredModels,
 	resolveModelConfig,
 	type ModelConfig,
-	type ModelServiceConfig,
-	type ModelServiceModelConfig,
 	type McpServerConfig,
 	type ReasoningEffort,
 } from "../types";
 import { defaultTranslator, localizeErrorMessage, type Translator } from "../i18n";
-import { makeAgent, makeTracer } from "../core/agent";
+import { makeAgent, makeTracer, fetchGuideDoc } from "../core/agent";
 import { mergeState, runAgentStream } from "../core/stream-runtime";
 import { renderMarkdown } from "./markdown";
 import { SessionStore } from "../core/session-store";
 import { ScheduledTaskManager } from "../core/scheduled-task-manager";
-import { UiMessageBuilder, ensureMessagesUi } from "../core/ui-message-builder";
+import { ensureMessagesUi } from "../core/ui-message-builder";
 import { compactMessages, shouldCompact } from "../core/compaction";
 import { createChatModel } from "../core/chat-model";
 import { getDefaultTools } from "../core/tools";
-import { SettingsView, type SettingsViewContext } from "./settings-view";
-import { TasksView, type TasksViewContext } from "./tasks-view";
+import { kernel, sqlValue } from "../core/tools/siyuan-kernel";
+import { SettingsView, type ChatPanelHost } from "./settings-view";
+import { TasksView } from "./tasks-view";
 import { Autocomplete } from "./autocomplete";
 import {
-	msgType, sessionTitle, cloneMessage, getMessageContent, getMessageReasoning, getMessageToolCalls,
-	getMessageToolCallId, getToolCallId, setMessageContent, setMessageToolCalls,
-	normalizeMessagesForDisplay, escapeHtml, getToolCategory, getToolAction,
-	getToolDisplayTitle, getActionLabel, shouldSendComposerOnKeydown,
+	sessionTitle, escapeHtml, getToolCategory, getToolAction,
+	getActionLabel, shouldSendComposerOnKeydown,
 	type AssistantMessageShell, type ActivityBlockRefs,
 } from "./chat-helpers";
+import {
+	type ToolEventRenderCtx,
+	buildToolSummaryHtml as buildToolSummaryHtmlImpl,
+	openDocumentTab,
+	applyToolUIEvent as applyToolUIEventImpl,
+	appendToolResultToElement as appendToolResultToElementImpl,
+	finalizeToolElement as finalizeToolElementImpl,
+} from "./tool-event-render";
+import {
+	messageKind, messageContent, messageReasoning, messageToolCalls,
+	messageToolCallId, toolCallId,
+} from "../core/message-shape";
 const CONFIG_STORAGE = "agent-config";
 const INIT_NOTEBOOK_NAME = "SiYuan-Agent";
 const INIT_DOC_TITLE = "SiYuan-Agent-Init";
 const INIT_DOC_PATH = `/${INIT_DOC_TITLE}`;
 
-export class ChatPanel {
+export class ChatPanel implements ChatPanelHost {
 	private container: HTMLElement;
 	private plugin: Plugin;
 	private tools: StructuredToolInterface[];
@@ -253,13 +258,7 @@ export class ChatPanel {
 			settingsViewEl: this.settingsViewEl,
 			plugin: this.plugin,
 			i18n: this.i18n,
-			getConfig: () => this.getConfig(),
-			refreshModelSelector: () => this.refreshModelSelector(),
-			openTaskEditor: (task?) => this.tasksView.openTaskEditor(task),
-			queryDocs: (keyword) => this.queryDocs(keyword),
-			onConfigSaved: async (nextConfig) => {
-				await this.handleConfigSaved(nextConfig);
-			},
+			host: this,
 		});
 
 		/* Bottom view switching */
@@ -815,7 +814,14 @@ export class ChatPanel {
 
 		try {
 			const modelOverride = sessionModelId ? activeModel : null;
-			const agent = await makeAgent(config, this.tools, extraSystemPrompt, modelOverride, this.i18n, reasoningEffort);
+			const guideContent = config.guideDoc?.id ? await fetchGuideDoc(config.guideDoc.id) : "";
+			const agent = await makeAgent(config, this.tools, {
+				extraSystemPrompt,
+				modelOverride,
+				i18n: this.i18n,
+				reasoningEffort,
+				guideContent,
+			});
 			const tracer = makeTracer(config);
 			const result = await runAgentStream({
 				agent,
@@ -910,8 +916,8 @@ export class ChatPanel {
 
 			/* Append action bar for completed messages */
 			if (shell.el.isConnected && shell.stackEl.children.length > 0) {
-				const lastAi = (latestState.messagesUi || []).filter((m: any) => msgType(m) === "ai").pop();
-				this.appendActionBar(shell, lastAi ? getMessageContent(lastAi) : "");
+				const lastAi = (latestState.messagesUi || []).filter((m: any) => messageKind(m) === "ai").pop();
+				this.appendActionBar(shell, lastAi ? messageContent(lastAi) : "");
 			}
 
 			s.state = latestState;
@@ -949,7 +955,7 @@ export class ChatPanel {
 		const ui: UiMessage[] = s.state.messagesUi;
 		let lastHumanIdx = -1;
 		for (let i = ui.length - 1; i >= 0; i--) {
-			if (msgType(ui[i]) === "human" || msgType(ui[i]) === "user") {
+			if (messageKind(ui[i]) === "human" || messageKind(ui[i]) === "user") {
 				lastHumanIdx = i;
 				break;
 			}
@@ -961,7 +967,7 @@ export class ChatPanel {
 		if (Array.isArray(msgs)) {
 			let lastHumanMsgIdx = -1;
 			for (let i = msgs.length - 1; i >= 0; i--) {
-				if (msgType(msgs[i]) === "human" || msgType(msgs[i]) === "user") {
+				if (messageKind(msgs[i]) === "human" || messageKind(msgs[i]) === "user") {
 					lastHumanMsgIdx = i;
 					break;
 				}
@@ -1154,9 +1160,9 @@ export class ChatPanel {
 		let lastAiContent = "";
 
 		for (const msg of messages) {
-			const type = msgType(msg);
+			const type = messageKind(msg);
 			const content = msg.kwargs?.content ?? msg.content;
-			const toolCalls = getMessageToolCalls(msg);
+			const toolCalls = messageToolCalls(msg);
 			const toolName = msg.kwargs?.name ?? msg.name;
 
 			if (type === "human" || type === "user") {
@@ -1203,7 +1209,7 @@ export class ChatPanel {
 					currentListEl = turn.listEl;
 				}
 				const result = typeof content === "string" ? content : JSON.stringify(content);
-				const toolEl = this.findPendingToolElement(getMessageToolCallId(msg), pendingToolEls);
+				const toolEl = this.findPendingToolElement(messageToolCallId(msg), pendingToolEls);
 				if (toolEl) {
 					this.appendToolResultToElement(toolEl, result);
 					this.finalizeToolElement(toolEl);
@@ -1239,9 +1245,9 @@ export class ChatPanel {
 		const toolCallArgsMap = new Map<string, unknown>();
 		for (const m of messagesUi) {
 			if (isToolMessageUi(m)) continue;
-			const toolCalls = getMessageToolCalls(m);
+			const toolCalls = messageToolCalls(m);
 			for (const tc of toolCalls) {
-				const tcId = getToolCallId(tc);
+				const tcId = toolCallId(tc);
 				if (tcId && tc.args) toolCallArgsMap.set(tcId, tc.args);
 			}
 		}
@@ -1282,10 +1288,9 @@ export class ChatPanel {
 				continue;
 			}
 
-			const type = msgType(m);
-			const content = getMessageContent(m);
-			const reasoning = getMessageReasoning(m);
-			const toolCalls = getMessageToolCalls(m);
+			const type = messageKind(m);
+			const content = messageContent(m);
+			const reasoning = messageReasoning(m);
 
 			if (type === "human" || type === "user") {
 				if (currentAssistantShell && lastAiContent) {
@@ -1378,7 +1383,7 @@ export class ChatPanel {
 			let toolCallIndex = startToolCallIndex;
 			for (const tc of toolCalls || []) {
 				toolCallIndex += 1;
-				const toolEl = this.createToolCallElement(tc.name, undefined, toolCallIndex, getToolCallId(tc));
+				const toolEl = this.createToolCallElement(tc.name, undefined, toolCallIndex, toolCallId(tc));
 				this.attachToolElementToShell(shell, toolEl);
 				if (toolUIEvents?.length) {
 					for (const event of toolUIEvents) {
@@ -1508,7 +1513,7 @@ export class ChatPanel {
 		const toolEls: HTMLElement[] = [];
 		for (const tc of toolCalls || []) {
 			toolCallIndex += 1;
-			const toolEl = this.createToolCallElement(tc.name, undefined, toolCallIndex, getToolCallId(tc));
+			const toolEl = this.createToolCallElement(tc.name, undefined, toolCallIndex, toolCallId(tc));
 			this.attachToolElementToShell(shell, toolEl);
 			if (toolUIEvents?.length) {
 				for (const event of toolUIEvents) {
@@ -1707,168 +1712,41 @@ export class ChatPanel {
 		return Number(toolEl.dataset.toolCallIndex) === event.toolCallIndex;
 	}
 
+	/**
+	 * The render seam handed to tool-event-render.ts. Built lazily and cached so
+	 * the per-event callbacks (which capture `this`) are stable.
+	 */
+	private toolRenderCtx: ToolEventRenderCtx | null = null;
+
+	private getToolRenderCtx(): ToolEventRenderCtx {
+		if (!this.toolRenderCtx) {
+			this.toolRenderCtx = {
+				i18n: this.i18n,
+				buildToolSummaryHtml: (toolName, contentHtml, category) =>
+					this.buildToolSummaryHtml(toolName, contentHtml, category),
+				localizeToolResult: (result) => this.localizeToolResult(result),
+				getActivityBlock: (el) => this.getActivityBlockFromElement(el),
+				refreshActivityBlock: (block) => this.refreshActivityBlock(block),
+				documentOpen: (id) => openDocumentTab(id),
+			};
+		}
+		return this.toolRenderCtx;
+	}
+
 	private applyToolUIEvent(toolEl: HTMLElement, event: ToolUIEvent): void {
-		const details = toolEl.querySelector("details");
-		if (!details) return;
-		toolEl.dataset.hasEvents = "true";
-		const category = getToolCategory(event.toolName || toolEl.dataset.toolName, event.payload);
-		toolEl.dataset.toolCategory = category;
-		toolEl.dataset.toolAction = getToolAction(event.toolName || toolEl.dataset.toolName, event.payload);
-
-		if (event.payload.type === "activity") {
-			this.renderToolActivitySummary(toolEl, details, event, event.payload);
-			return;
-		}
-
-		if (event.payload.type === "created_document") {
-			this.renderToolActivitySummary(toolEl, details, event, {
-				type: "activity",
-				category: "change",
-				action: "create",
-				id: event.payload.id,
-				path: event.payload.path,
-				label: event.payload.path,
-				meta: this.t("chat.tool.createdDocument"),
-				open: true,
-			});
-			return;
-		}
-
-		if (event.payload.type === "document_link") {
-			this.renderToolActivitySummary(toolEl, details, event, {
-				type: "activity",
-				category: "lookup",
-				action: "read",
-				id: event.payload.id,
-				path: event.payload.path,
-				label: event.payload.label,
-				meta: this.t("chat.tool.readDocument"),
-				open: event.payload.open,
-			});
-			return;
-		}
-
-		if (event.payload.type === "document_blocks") {
-			this.renderToolActivitySummary(toolEl, details, event, {
-				type: "activity",
-				category: "lookup",
-				action: "read",
-				id: event.payload.id,
-				path: event.payload.path,
-				label: event.payload.path,
-				meta: this.t("chat.tool.readBlocks", { count: event.payload.blockCount }),
-				open: event.payload.open,
-			});
-			return;
-		}
-
-		if (event.payload.type === "append_block") {
-			this.renderToolActivitySummary(toolEl, details, event, {
-				type: "activity",
-				category: "change",
-				action: "append",
-				id: event.payload.parentID,
-				path: event.payload.path,
-				label: event.payload.path,
-				meta: this.t("chat.tool.appendedBlocks", { count: event.payload.blockIDs.length || 0 }),
-				open: event.payload.open,
-			});
-			return;
-		}
-
-		if (event.payload.type === "edit_blocks") {
-			this.renderToolActivitySummary(toolEl, details, event, {
-				type: "activity",
-				category: "change",
-				action: "edit",
-				id: event.payload.primaryDocumentID || event.payload.documentIDs[0],
-				path: event.payload.path,
-				label: event.payload.path,
-				meta: this.t("chat.tool.editedBlocks", { count: event.payload.editedCount }),
-				open: event.payload.open,
-			});
-			return;
-		}
-
-		const line = document.createElement("div");
-		line.className = "chat-msg__tool-progress";
-		line.textContent = event.payload.type === "text"
-			? event.payload.text
-			: event.payload.raw;
-		details.appendChild(line);
+		applyToolUIEventImpl(toolEl, event, this.getToolRenderCtx());
 	}
 
 	private appendToolResultToElement(toolEl: HTMLElement, result: string): void {
-		const details = toolEl.querySelector("details");
-		if (!details) return;
-
-		// Skip raw result if the tool already has rich UI events
-		if (toolEl.dataset.hasEvents === "true") return;
-
-		// Skip empty or whitespace-only results
-		const trimmed = this.localizeToolResult(result);
-		if (!trimmed) return;
-
-		const pre = document.createElement("pre");
-		pre.className = "chat-msg__tool-result";
-		pre.textContent = trimmed.length > 500 ? trimmed.slice(0, 500) + "..." : trimmed;
-		details.appendChild(pre);
+		appendToolResultToElementImpl(toolEl, result, this.getToolRenderCtx());
 	}
 
 	private finalizeToolElement(toolEl: HTMLElement): void {
-		if (toolEl.dataset.toolStatus === "done")
-			return;
-		toolEl.dataset.toolStatus = "done";
-		const details = toolEl.querySelector("details");
-		if (details)
-			details.open = false;
-		const block = this.getActivityBlockFromElement(toolEl.parentElement?.closest(".chat-msg__activity-block") as HTMLElement | null);
-		if (block)
-			this.refreshActivityBlock(block);
-	}
-
-	private renderToolActivitySummary(
-		toolEl: HTMLElement,
-		details: HTMLDetailsElement,
-		event: ToolUIEvent,
-		options: { id?: string; path?: string; label?: string; meta?: string; open?: boolean; category?: "lookup" | "change"; action?: string },
-	): void {
-		const summary = details.querySelector("summary");
-		if (!summary) return;
-
-		const docId = options.id || "";
-		const docTitle = escapeHtml(options.label || options.path || docId || this.t("chat.tool.defaultDocument"));
-		const meta = options.meta ? `<span class="chat-msg__doc-meta">${escapeHtml(options.meta)}</span>` : "";
-		const canOpen = Boolean(docId) && options.open !== false;
-		const contentHtml = docId
-			? `<a class="${canOpen ? "chat-msg__doc-link chat-msg__doc-link--open" : "chat-msg__doc-link chat-msg__doc-link--muted"}" data-id="${escapeHtml(docId)}" href="javascript:void(0)">${docTitle}</a>${meta}`
-			: `<span class="chat-msg__doc-label">${docTitle}</span>${meta}`;
-		summary.innerHTML = this.buildToolSummaryHtml(
-			event.toolName || toolEl.dataset.toolName || "tool",
-			contentHtml,
-			(options.category || toolEl.dataset.toolCategory as "lookup" | "change")
-		);
-
-		const link = summary.querySelector<HTMLElement>(".chat-msg__doc-link");
-		if (link && canOpen && docId) {
-			link.addEventListener("click", () => {
-				openTab({ app: (globalThis as any).siyuanApp, doc: { id: docId } });
-			});
-		} else if (link) {
-			link.addEventListener("click", (e) => {
-				e.preventDefault();
-			});
-		}
-
-		const block = this.getActivityBlockFromElement(toolEl.closest(".chat-msg__activity-block") as HTMLElement | null);
-		if (block)
-			this.refreshActivityBlock(block);
+		finalizeToolElementImpl(toolEl, this.getToolRenderCtx());
 	}
 
 	private buildToolSummaryHtml(toolName: string, contentHtml = "", category?: "lookup" | "change"): string {
-		const resolvedCategory = category || getToolCategory(toolName);
-		const badge = resolvedCategory === "change" ? this.t("chat.tool.badge.change") : this.t("chat.tool.badge.lookup");
-		return `<span class="chat-msg__tool-prefix"><span class="chat-msg__tool-dot" aria-hidden="true"></span>${escapeHtml(badge)}</span><span class="chat-msg__tool-title">${escapeHtml(getToolDisplayTitle(toolName, this.i18n))}</span>${contentHtml}`;
+		return buildToolSummaryHtmlImpl(toolName, this.i18n, contentHtml, category);
 	}
 
 	private scrollToBottom(): void {
@@ -2005,7 +1883,8 @@ export class ChatPanel {
 		}
 	}
 
-	private async refreshModelSelector(): Promise<void> {
+	/** ChatPanelHost: refresh the model picker after config/model changes. */
+	public async refreshModelSelector(): Promise<void> {
 		if (!this.modelPickerBtn || !this.modelPickerMenuEl) return;
 		const config = await this.getConfig();
 		const models = listConfiguredModels(config);
@@ -2052,7 +1931,8 @@ export class ChatPanel {
 			${modelOptionsHtml}`;
 	}
 
-	private async getConfig(): Promise<AgentConfig> {
+	/** ChatPanelHost: load (and normalize) the persisted agent config. */
+	public async getConfig(): Promise<AgentConfig> {
 		if (Object.prototype.hasOwnProperty.call(this.plugin.data, CONFIG_STORAGE)) {
 			const cached = this.plugin.data[CONFIG_STORAGE];
 			return normalizeAgentConfig(cached);
@@ -2069,26 +1949,12 @@ export class ChatPanel {
 		return normalizeAgentConfig();
 	}
 
-	private async postSiyuan<T = any>(url: string, data: any): Promise<T> {
-		const resp = await fetch(url, {
-			method: "POST",
-			body: JSON.stringify(data),
-		});
-		const json = await resp.json();
-		if (json.code !== 0) {
-			throw new Error(json.msg || `API error code ${json.code}`);
-		}
-		return json.data as T;
-	}
-
 	private async ensureInitGuideDoc(config: AgentConfig): Promise<AgentConfig> {
-		const notebooksData = await this.postSiyuan<{ notebooks?: Array<{ id: string; name: string; closed?: boolean }> }>("/api/notebook/lsNotebooks", {});
-		let notebook = (notebooksData.notebooks || []).find((item) => item.name === INIT_NOTEBOOK_NAME);
+		const notebooksData = await kernel.notebooks.list();
+		let notebook = (notebooksData.notebooks || []).find((item: { name: string }) => item.name === INIT_NOTEBOOK_NAME);
 
 		if (!notebook) {
-			const created = await this.postSiyuan<{ notebook?: { id: string; name: string; closed?: boolean } }>("/api/notebook/createNotebook", {
-				name: INIT_NOTEBOOK_NAME,
-			});
+			const created = await kernel.notebooks.create(INIT_NOTEBOOK_NAME);
 			if (!created.notebook?.id) {
 				throw new Error("Failed to create init notebook");
 			}
@@ -2096,10 +1962,10 @@ export class ChatPanel {
 		}
 
 		if (notebook.closed) {
-			await this.postSiyuan("/api/notebook/openNotebook", { notebook: notebook.id });
+			await kernel.notebooks.open(notebook.id);
 		}
 
-		const docId = await this.postSiyuan<string>("/api/filetree/createDocWithMd", {
+		const docId = await kernel.filetree.createDocWithMd({
 			notebook: notebook.id,
 			path: INIT_DOC_PATH,
 			markdown: "",
@@ -2118,24 +1984,15 @@ export class ChatPanel {
 
 	/* --- Autocomplete --- */
 
-	private async queryDocs(keyword: string): Promise<{ id: string, title: string }[]> {
-		const escaped = keyword.replace(/'/g, "''");
+	/** ChatPanelHost: search documents for the guide-doc picker. */
+	public async queryDocs(keyword: string): Promise<{ id: string, title: string }[]> {
 		const stmt = keyword
-			? `SELECT * FROM blocks WHERE type='d' AND content LIKE '%${escaped}%' ORDER BY updated DESC LIMIT 8`
+			? `SELECT * FROM blocks WHERE type='d' AND content LIKE ${sqlValue(`%${keyword}%`)} ORDER BY updated DESC LIMIT 8`
 			: "SELECT * FROM blocks WHERE type='d' ORDER BY updated DESC LIMIT 8";
 
 		try {
-			const resp = await fetch("/api/query/sql", {
-				method: "POST",
-				body: JSON.stringify({ stmt }),
-			});
-			const json = await resp.json();
-			if (json.code === 0 && Array.isArray(json.data)) {
-				return json.data.map((d: any) => ({
-					id: d.id,
-					title: d.content,
-				}));
-			}
+			const rows = await kernel.sql<{ id: string; content: string }>(stmt);
+			return rows.map((d) => ({ id: d.id, title: d.content }));
 		} catch { /* ignore */ }
 		return [];
 	}
@@ -2146,9 +2003,21 @@ export class ChatPanel {
 		};
 		await pluginAny.mcpManager?.connectAll?.((nextConfig.mcpServers || []).filter((item) => item.enabled));
 		this.tools = [
-			...getDefaultTools(() => nextConfig, () => this.taskManager, this.i18n),
+			...getDefaultTools(() => nextConfig, () => this.taskManager, this.i18n, { includeDeleteDocument: true }),
 			...(pluginAny.mcpManager?.getAllTools?.() || []),
 		];
 		await this.refreshModelSelector();
+	}
+
+	/* ── ChatPanelHost re-exposures (cross-delegate) ─────────────────────── */
+
+	/** ChatPanelHost: after config persists, reconnect MCP + rebuild tools. */
+	public async onConfigSaved(nextConfig: AgentConfig): Promise<void> {
+		await this.handleConfigSaved(nextConfig);
+	}
+
+	/** ChatPanelHost: open the scheduled-task editor (delegates to TasksView). */
+	public async openTaskEditor(task?: ScheduledTaskMeta): Promise<void> {
+		await this.tasksView.openTaskEditor(task);
 	}
 }

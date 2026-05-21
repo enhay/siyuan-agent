@@ -64,8 +64,11 @@ describe("createSubAgentTool", () => {
 		expect(createAgent).toHaveBeenCalledWith(
 			createConfig(),
 			[expect.objectContaining({ name: "search_fulltext" }), expect.objectContaining({ name: "edit_blocks" })],
-			"prompt",
-			expect.objectContaining({ id: "__legacy__", model: "test-model" }),
+			expect.objectContaining({
+				extraSystemPrompt: "prompt",
+				modelOverride: expect.objectContaining({ id: "__legacy__", model: "test-model" }),
+				guideContent: "",
+			}),
 		);
 		expect(invoke).toHaveBeenCalledTimes(1);
 		expect(invoke).toHaveBeenCalledWith(

@@ -1,3 +1,5 @@
+import { makeKernel, type SiyuanKernel } from "./tools/siyuan-kernel";
+
 export type SiyuanApiFetcher = (url: string, data: unknown) => Promise<any>;
 
 export interface ListDocumentsInput {
@@ -52,7 +54,7 @@ interface BuildNodeOptions {
 	depth: number;
 	childLimit: number;
 	includeSummary: boolean;
-	fetcher: SiyuanApiFetcher;
+	kernel: SiyuanKernel;
 	parentHPath: string;
 }
 
@@ -268,16 +270,13 @@ async function mapWithConcurrency<T, U>(
 async function resolveListPaths(
 	notebook: string,
 	hpath: string,
-	fetcher: SiyuanApiFetcher,
+	kernel: SiyuanKernel,
 ): Promise<PathResolution> {
 	if ("/" === hpath) {
 		return { resolvedPaths: ["/"], pathMatchCount: 1 };
 	}
 
-	const ids = await fetcher("/api/filetree/getIDsByHPath", {
-		notebook,
-		path: hpath,
-	});
+	const ids = await kernel.filetree.getIDsByHPath(notebook, hpath);
 
 	if (!Array.isArray(ids) || 0 === ids.length) {
 		return { resolvedPaths: [], pathMatchCount: 0 };
@@ -288,7 +287,7 @@ async function resolveListPaths(
 		REQUEST_CONCURRENCY,
 		async (id) => {
 			try {
-				const data = await fetcher("/api/filetree/getPathByID", { id });
+				const data = await kernel.filetree.getPathByID(id);
 				if ("string" !== typeof data?.path) {
 					return null;
 				}
@@ -310,13 +309,12 @@ async function fetchFilesByPath(
 	notebook: string,
 	path: string,
 	maxListCount: number,
-	fetcher: SiyuanApiFetcher,
+	kernel: SiyuanKernel,
 ): Promise<SiyuanDocFile[]> {
-	const data = await fetcher("/api/filetree/listDocsByPath", {
+	const data = await kernel.filetree.listDocsByPath({
 		notebook,
 		path,
 		maxListCount,
-		ignoreMaxListHint: true,
 	});
 
 	if (!Array.isArray(data?.files)) {
@@ -336,12 +334,12 @@ async function fetchFilesByPath(
 
 async function fetchDocumentHPath(
 	id: string,
-	fetcher: SiyuanApiFetcher,
+	kernel: SiyuanKernel,
 	fallbackParentHPath: string,
 	title: string,
 ): Promise<string> {
 	try {
-		const hpath = await fetcher("/api/filetree/getHPathByID", { id });
+		const hpath = await kernel.filetree.getHPathByID(id);
 		if ("string" === typeof hpath && hpath.length > 0) {
 			return hpath;
 		}
@@ -353,10 +351,10 @@ async function fetchDocumentHPath(
 
 export async function fetchDocumentSummaryById(
 	id: string,
-	fetcher: SiyuanApiFetcher,
+	kernel: SiyuanKernel,
 ): Promise<string | undefined> {
 	try {
-		const data = await fetcher("/api/export/exportMdContent", { id });
+		const data = await kernel.exportApi.mdContent(id);
 		const content = "string" === typeof data?.content ? data.content : "";
 		if (!content) {
 			return undefined;
@@ -386,8 +384,8 @@ async function buildDocumentNode(
 	const updated = unixSecondsToSiyuanTimestamp(file.mtime);
 
 	const [hpath, summary] = await Promise.all([
-		fetchDocumentHPath(file.id, options.fetcher, options.parentHPath, title),
-		options.includeSummary ? fetchDocumentSummaryById(file.id, options.fetcher) : Promise.resolve(undefined),
+		fetchDocumentHPath(file.id, options.kernel, options.parentHPath, title),
+		options.includeSummary ? fetchDocumentSummaryById(file.id, options.kernel) : Promise.resolve(undefined),
 	]);
 
 	let children: ListDocumentsItem[] | undefined;
@@ -399,7 +397,7 @@ async function buildDocumentNode(
 				options.notebook,
 				toChildrenPath(file.path),
 				options.childLimit,
-				options.fetcher,
+				options.kernel,
 			);
 			const childNodes = await mapWithConcurrency(
 				childFiles,
@@ -441,6 +439,7 @@ export async function listDocumentsViaApi(
 	input: ListDocumentsInput,
 	fetcher: SiyuanApiFetcher,
 ): Promise<ListDocumentsResult> {
+	const kernel = makeKernel(fetcher);
 	const normalizedPath = normalizeHPath(input.path);
 	const depth = clampInteger(input.depth, DEFAULT_DEPTH, 0, MAX_DEPTH);
 	const page = clampInteger(input.page, DEFAULT_PAGE, 1, Number.MAX_SAFE_INTEGER);
@@ -448,7 +447,7 @@ export async function listDocumentsViaApi(
 	const childLimit = clampInteger(input.child_limit, DEFAULT_CHILD_LIMIT, 0, MAX_CHILD_LIMIT);
 	const includeSummary = false !== input.include_summary;
 
-	const { resolvedPaths, pathMatchCount } = await resolveListPaths(input.notebook, normalizedPath, fetcher);
+	const { resolvedPaths, pathMatchCount } = await resolveListPaths(input.notebook, normalizedPath, kernel);
 	if (0 === resolvedPaths.length) {
 		return {
 			notebook: input.notebook,
@@ -465,7 +464,7 @@ export async function listDocumentsViaApi(
 	}
 
 	const docLists = await Promise.all(
-		resolvedPaths.map((resolvedPath) => fetchFilesByPath(input.notebook, resolvedPath, 0, fetcher)),
+		resolvedPaths.map((resolvedPath) => fetchFilesByPath(input.notebook, resolvedPath, 0, kernel)),
 	);
 	const allFiles = dedupeFiles(docLists.flat());
 	const total = allFiles.length;
@@ -481,7 +480,7 @@ export async function listDocumentsViaApi(
 			depth,
 			childLimit,
 			includeSummary,
-			fetcher,
+			kernel,
 			parentHPath: normalizedPath,
 		}),
 	);

@@ -1,5 +1,6 @@
 import type { ToolUIEvent, UiMessage, ToolMessageUi } from "../types";
 import { isToolMessageUi } from "../types";
+import { messageKind, messageContent } from "../core/message-shape";
 
 /**
  * Represents a single execution run within a scheduled task session.
@@ -28,26 +29,9 @@ const SCHEDULED_PREFIXES = ["\u5b9a\u65f6\u4efb\u52a1\u6267\u884c\u65f6\u95f4\uf
 const TASK_TITLE_PREFIXES = ["\u4efb\u52a1\u540d\u79f0\uff1a", "Task name: "];
 const ERROR_MARKERS = ["\u5b9a\u65f6\u4efb\u52a1\u6267\u884c\u5931\u8d25", "Scheduled task execution failed"];
 
-function msgType(m: any): string {
-	if (typeof m._getType === "function") return m._getType();
-	if (m.lc === 1 && Array.isArray(m.id)) {
-		const cls = m.id[m.id.length - 1] as string;
-		if (cls === "HumanMessage") return "human";
-		if (cls === "AIMessage" || cls === "AIMessageChunk") return "ai";
-		if (cls === "SystemMessage") return "system";
-		if (cls === "ToolMessage") return "tool";
-	}
-	return m.type ?? m.role ?? "";
-}
-
-function getContent(m: any): string {
-	const content = m.kwargs?.content ?? m.content;
-	return typeof content === "string" ? content : "";
-}
-
 function isScheduledRunStart(m: any): boolean {
-	return (msgType(m) === "human" || msgType(m) === "user") &&
-		SCHEDULED_PREFIXES.some((prefix) => getContent(m).startsWith(prefix));
+	return (messageKind(m) === "human" || messageKind(m) === "user") &&
+		SCHEDULED_PREFIXES.some((prefix) => messageContent(m).startsWith(prefix));
 }
 
 function extractRunAt(content: string): string | undefined {
@@ -74,11 +58,11 @@ function extractTaskTitle(content: string): string | undefined {
 
 function inferRunStatus(messages: any[]): "success" | "error" | "unknown" {
 	for (const m of messages) {
-		const content = getContent(m);
+		const content = messageContent(m);
 		if (ERROR_MARKERS.some((marker) => content.includes(marker))) return "error";
 	}
 	const hasAi = messages.some(m => {
-		const t = msgType(m);
+		const t = messageKind(m);
 		return t === "ai";
 	});
 	return hasAi ? "success" : "unknown";
@@ -160,7 +144,7 @@ export function groupTaskRuns(messages: any[], toolUIEvents: ToolUIEvent[], mess
 		const start = boundaries[b];
 		const end = b + 1 < boundaries.length ? boundaries[b + 1] - 1 : messages.length - 1;
 		const runMessages = messages.slice(start, end + 1);
-		const content = getContent(messages[start]);
+		const content = messageContent(messages[start]);
 
 		const runToolUIEvents = toolUIEvents.filter(ev => {
 			const runIdx = toolCallRunMap.get(ev.toolCallIndex);

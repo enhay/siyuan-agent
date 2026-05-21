@@ -42,8 +42,3 @@ export function emitActivity(
 		...payload,
 	});
 }
-
-/** Sanitize a string for safe inclusion in SQL queries. */
-export function sqlEscape(val: string): string {
-	return val.replace(/'/g, "''");
-}

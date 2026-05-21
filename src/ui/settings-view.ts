@@ -22,18 +22,29 @@ import { defaultTranslator, type Translator } from "../i18n";
 
 const CONFIG_STORAGE = "agent-config";
 
-/* ── Context interface ───────────────────────────────────────────────── */
+/* ── Host interface ──────────────────────────────────────────────────── */
 
-export interface SettingsViewContext {
-	settingsViewEl: HTMLElement;
-	plugin: Plugin;
-	i18n?: Translator;
+/**
+ * The narrow surface SettingsView needs from its host (ChatPanel). Replaces the
+ * former bundle of anonymous closures so the dependency is explicit and
+ * mockable. ChatPanel `implements ChatPanelHost`.
+ */
+export interface ChatPanelHost {
 	getConfig: () => Promise<AgentConfig>;
 	refreshModelSelector: () => Promise<void>;
 	openTaskEditor: (task?: ScheduledTaskMeta) => Promise<void>;
 	queryDocs: (keyword: string) => Promise<Array<{ id: string; title: string }>>;
 	/** Called after config is persisted – handle MCP reconnection + tool rebuild. */
 	onConfigSaved: (nextConfig: AgentConfig) => Promise<void>;
+}
+
+/* ── Context interface ───────────────────────────────────────────────── */
+
+export interface SettingsViewContext {
+	settingsViewEl: HTMLElement;
+	plugin: Plugin;
+	i18n?: Translator;
+	host: ChatPanelHost;
 }
 
 /* ── SettingsView class ──────────────────────────────────────────────── */
@@ -57,7 +68,7 @@ export class SettingsView {
 	}
 
 	async render(): Promise<void> {
-		const config = await this.ctx.getConfig();
+		const config = await this.ctx.host.getConfig();
 		const notebookOptions = this.draft?.notebookOptions?.length
 			? this.draft.notebookOptions
 			: await this.loadNotebookOptions();
@@ -264,7 +275,7 @@ export class SettingsView {
 	private async saveForm(form: HTMLFormElement): Promise<void> {
 		const formData = new FormData(form);
 		this.syncDraftFromForm();
-		const currentConfig = await this.ctx.getConfig();
+		const currentConfig = await this.ctx.host.getConfig();
 		const draft = this.draft;
 		if (!draft) return;
 		const nextConfig: AgentConfig = {
@@ -284,7 +295,7 @@ export class SettingsView {
 		};
 		this.ctx.plugin.data[CONFIG_STORAGE] = nextConfig;
 		await this.ctx.plugin.saveData(CONFIG_STORAGE, nextConfig);
-		await this.ctx.onConfigSaved(nextConfig);
+		await this.ctx.host.onConfigSaved(nextConfig);
 		this.draft = {
 			...draft,
 			customInstructions: nextConfig.customInstructions,
@@ -300,7 +311,7 @@ export class SettingsView {
 			mcpServers: (nextConfig.mcpServers || []).map((item) => ({ ...item })),
 			notebookOptions: draft.notebookOptions,
 		};
-		await this.ctx.refreshModelSelector();
+		await this.ctx.host.refreshModelSelector();
 		void this.render();
 	}
 
@@ -475,7 +486,7 @@ export class SettingsView {
 			if (timer) clearTimeout(timer);
 			const keyword = input.value.trim();
 			timer = setTimeout(async () => {
-				const docs = await this.ctx.queryDocs(keyword);
+				const docs = await this.ctx.host.queryDocs(keyword);
 				if (docs.length === 0) {
 					dropdown.classList.add("fn__none");
 					dropdown.innerHTML = "";

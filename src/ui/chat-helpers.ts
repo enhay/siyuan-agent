@@ -3,10 +3,16 @@
  * Extracted from chat-panel.ts for maintainability.
  */
 
-import type { AgentState, ToolUIEvent, ToolUIEventPayload, UiMessage, ToolMessageUi } from "../types";
-import { isToolMessageUi } from "../types";
+import type { AgentState, ToolUIEventPayload } from "../types";
 import type { ModelServiceConfig, McpServerConfig } from "../types";
 import { defaultTranslator, type Translator } from "../i18n";
+import {
+	messageKind,
+	messageContent,
+	messageToolCalls,
+	setMessageContent,
+	setMessageToolCalls,
+} from "../core/message-shape";
 
 /* ── Interfaces ──────────────────────────────────────────────────────── */
 
@@ -56,26 +62,10 @@ export function shouldSendComposerOnKeydown(e: ComposerKeyEvent): boolean {
 	return true;
 }
 
-/** Extract the role string from either a live BaseMessage or a serialised dict. */
-export function msgType(m: any): string {
-	// Live BaseMessage instance
-	if (typeof m._getType === "function") return m._getType();
-	// LangChain JS serialised format
-	if (m.lc === 1 && Array.isArray(m.id)) {
-		const cls = m.id[m.id.length - 1] as string;
-		if (cls === "HumanMessage") return "human";
-		if (cls === "AIMessage" || cls === "AIMessageChunk") return "ai";
-		if (cls === "SystemMessage") return "system";
-		if (cls === "ToolMessage") return "tool";
-	}
-	// Legacy plain-object
-	return m.type ?? m.role ?? "";
-}
-
 export function sessionTitle(state: AgentState): string {
 	const msgs = state?.messages || [];
 	const first = msgs.find((m: any) => {
-		const t = msgType(m);
+		const t = messageKind(m);
 		return t === "human" || t === "user";
 	});
 	if (!first) return "New Chat";
@@ -91,65 +81,20 @@ export function cloneMessage(raw: Record<string, any>): Record<string, any> {
 	};
 }
 
-export function getMessageContent(raw: Record<string, any>): string {
-	const content = raw.kwargs?.content ?? raw.content;
-	return typeof content === "string" ? content : "";
-}
-
-export function getMessageReasoning(raw: Record<string, any>): string {
-	const reasoning = raw.kwargs?.additional_kwargs?.reasoning_content
-		?? raw.additional_kwargs?.reasoning_content
-		?? raw.kwargs?.lc_kwargs?.additional_kwargs?.reasoning_content
-		?? raw.lc_kwargs?.additional_kwargs?.reasoning_content;
-	return typeof reasoning === "string" ? reasoning : "";
-}
-
-export function getMessageToolCalls(raw: Record<string, any>): any[] {
-	const toolCalls = raw.kwargs?.tool_calls ?? raw.tool_calls;
-	return Array.isArray(toolCalls) ? toolCalls : [];
-}
-
-export function getMessageToolCallId(raw: Record<string, any>): string {
-	const toolCallId = raw.kwargs?.tool_call_id ?? raw.tool_call_id;
-	return typeof toolCallId === "string" ? toolCallId : "";
-}
-
-export function getToolCallId(raw: Record<string, any>): string {
-	const toolCallId = raw?.id ?? raw?.tool_call_id;
-	return typeof toolCallId === "string" ? toolCallId : "";
-}
-
-export function setMessageContent(raw: Record<string, any>, content: string): void {
-	if (raw.kwargs && "content" in raw.kwargs) {
-		raw.kwargs.content = content;
-	} else {
-		raw.content = content;
-	}
-}
-
-export function setMessageToolCalls(raw: Record<string, any>, toolCalls: any[]): void {
-	if (raw.kwargs && ("tool_calls" in raw.kwargs || raw.lc === 1)) {
-		raw.kwargs = raw.kwargs || {};
-		raw.kwargs.tool_calls = toolCalls;
-	} else {
-		raw.tool_calls = toolCalls;
-	}
-}
-
 export function normalizeMessagesForDisplay(messages: any[]): any[] {
 	const normalized: any[] = [];
 	for (const raw of messages || []) {
-		const type = msgType(raw);
+		const type = messageKind(raw);
 		if (type !== "ai") {
 			normalized.push(raw);
 			continue;
 		}
 
 		const prev = normalized[normalized.length - 1];
-		if (prev && msgType(prev) === "ai") {
+		if (prev && messageKind(prev) === "ai") {
 			const merged = cloneMessage(prev);
-			setMessageContent(merged, getMessageContent(prev) + getMessageContent(raw));
-			setMessageToolCalls(merged, [...getMessageToolCalls(prev), ...getMessageToolCalls(raw)]);
+			setMessageContent(merged, messageContent(prev) + messageContent(raw));
+			setMessageToolCalls(merged, [...messageToolCalls(prev), ...messageToolCalls(raw)]);
 			normalized[normalized.length - 1] = merged;
 			continue;
 		}

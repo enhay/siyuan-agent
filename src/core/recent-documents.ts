@@ -1,4 +1,5 @@
 import { extractDocumentSummary, type SiyuanApiFetcher } from "./list-documents";
+import { makeKernel, type SiyuanKernel } from "./tools/siyuan-kernel";
 
 export interface RecentDocumentsInput {
 	limit?: number;
@@ -36,12 +37,14 @@ function isRecentDocumentIdRow(value: any): value is RecentDocumentIdRow {
 }
 
 function buildRecentDocumentsSql(limit: number): string {
+	// `limit` is an already-clamped integer; interpolate as a bare number
+	// (not via sqlValue, which would wrongly quote it).
 	return [
 		"SELECT id",
 		"FROM blocks",
 		"WHERE type = 'd'",
 		"ORDER BY updated DESC",
-		`LIMIT ${limit}`,
+		`LIMIT ${Number(limit)}`,
 	].join(" ");
 }
 
@@ -57,9 +60,9 @@ function getTitleFromHPath(hpath: string, fallbackId: string): string {
 
 async function fetchRecentDocumentItem(
 	id: string,
-	fetcher: SiyuanApiFetcher,
+	kernel: SiyuanKernel,
 ): Promise<RecentDocumentsItem> {
-	const data = await fetcher("/api/export/exportMdContent", { id });
+	const data = await kernel.exportApi.mdContent(id);
 	const hpath = "string" === typeof data?.hPath ? data.hPath : "";
 	const content = "string" === typeof data?.content ? data.content : "";
 	const item: RecentDocumentsItem = {
@@ -80,11 +83,12 @@ export async function recentDocumentsViaApi(
 	input: RecentDocumentsInput,
 	fetcher: SiyuanApiFetcher,
 ): Promise<RecentDocumentsResult> {
+	const kernel = makeKernel(fetcher);
 	const limit = clampInteger(input.limit, DEFAULT_LIMIT, 1, MAX_LIMIT);
 	const stmt = buildRecentDocumentsSql(limit);
-	const data = await fetcher("/api/query/sql", { stmt });
+	const data = await kernel.sql(stmt);
 	const rows = Array.isArray(data) ? data.filter(isRecentDocumentIdRow) : [];
-	const items = await Promise.all(rows.map((row) => fetchRecentDocumentItem(row.id, fetcher)));
+	const items = await Promise.all(rows.map((row) => fetchRecentDocumentItem(row.id, kernel)));
 
 	return {
 		limit,

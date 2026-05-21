@@ -5,6 +5,7 @@
 
 import { SLASH_COMMANDS } from "../types";
 import { escapeHtml } from "./chat-helpers";
+import { kernel, sqlValue } from "../core/tools/siyuan-kernel";
 
 export class Autocomplete {
 	private textareaEl: HTMLTextAreaElement;
@@ -95,23 +96,13 @@ export class Autocomplete {
 	}
 
 	private async queryDocs(keyword: string): Promise<{ id: string; title: string }[]> {
-		const escaped = keyword.replace(/'/g, "''");
 		const stmt = keyword
-			? `SELECT * FROM blocks WHERE type='d' AND content LIKE '%${escaped}%' ORDER BY updated DESC LIMIT 8`
+			? `SELECT * FROM blocks WHERE type='d' AND content LIKE ${sqlValue(`%${keyword}%`)} ORDER BY updated DESC LIMIT 8`
 			: "SELECT * FROM blocks WHERE type='d' ORDER BY updated DESC LIMIT 8";
 
 		try {
-			const resp = await fetch("/api/query/sql", {
-				method: "POST",
-				body: JSON.stringify({ stmt }),
-			});
-			const json = await resp.json();
-			if (json.code === 0 && Array.isArray(json.data)) {
-				return json.data.map((d: any) => ({
-					id: d.id,
-					title: d.content,
-				}));
-			}
+			const rows = await kernel.sql<{ id: string; content: string }>(stmt);
+			return rows.map((d) => ({ id: d.id, title: d.content }));
 		} catch { /* ignore */ }
 		return [];
 	}

@@ -7,6 +7,7 @@ import type {
 	SessionIndexEntry,
 	SessionKind,
 } from "../types";
+import { genId } from "./message-shape";
 
 export const INDEX_STORAGE = "chat-sessions-index";
 export const SESSION_PREFIX = "chat-session-";
@@ -84,10 +85,6 @@ export function createPluginStorage(plugin: Plugin): PluginStorage {
 			}
 		},
 	};
-}
-
-function genId(): string {
-	return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
 function cloneTaskMeta(task?: ScheduledTaskMeta): ScheduledTaskMeta | undefined {

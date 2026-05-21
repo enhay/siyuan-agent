@@ -1,6 +1,7 @@
 import { tool, ToolRuntime } from "@langchain/core/tools";
 import { z } from "zod";
 import { siyuanFetch, emitActivity } from "./siyuan-api";
+import { kernel } from "./siyuan-kernel";
 import { listDocumentsViaApi } from "../list-documents";
 import { recentDocumentsViaApi } from "../recent-documents";
 import { defaultTranslator, type Translator } from "../../i18n";
@@ -8,7 +9,7 @@ import { defaultTranslator, type Translator } from "../../i18n";
 export function createListNotebooksTool(i18n: Translator = defaultTranslator) {
 return tool(
 	async (_, runtime: ToolRuntime) => {
-		const data = await siyuanFetch("/api/notebook/lsNotebooks", {});
+		const data = await kernel.notebooks.list();
 		const notebooks = (data.notebooks || []).map((nb: any) => ({
 			id: nb.id,
 			name: nb.name,

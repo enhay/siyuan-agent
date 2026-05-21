@@ -23,7 +23,7 @@ describe("i18n", () => {
 		const chinesePrompt = buildSystemPrompt(createTranslator(zhCN));
 
 		expect(englishPrompt).toContain("You are the AI agent for SiYuan Notes");
-		expect(chinesePrompt).toContain("你是思源笔记的 AI 助手");
+		expect(chinesePrompt).toContain("你是思源笔记的 AI 智能体");
 		expect(englishPrompt).not.toContain("{{CURRENT_DATETIME}}");
 		expect(chinesePrompt).not.toContain("{{CURRENT_DATETIME}}");
 	});

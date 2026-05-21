@@ -11,7 +11,7 @@ import type {
 	SessionIndexEntry,
 } from "../types";
 import { resolveModelConfig } from "../types";
-import { makeAgent, makeTracer } from "./agent";
+import { makeAgent, makeTracer, fetchGuideDoc } from "./agent";
 import { mergeState, runAgentStream } from "./stream-runtime";
 import { SessionStore } from "./session-store";
 import { defaultTranslator, localizeErrorMessage, type Translator } from "../i18n";
@@ -418,7 +418,8 @@ export class ScheduledTaskManager {
 			if (!modelConfig.apiKey) {
 				throw new Error(i18n.t("chat.error.apiKeyMissing"));
 			}
-			const agent = await makeAgent(config, this.options.getTools(), null, null, i18n);
+			const guideContent = config.guideDoc?.id ? await fetchGuideDoc(config.guideDoc.id) : "";
+			const agent = await makeAgent(config, this.options.getTools(), { i18n, guideContent });
 			const tracer = makeTracer(config);
 			const input = mergeState(null, buildScheduledTaskRunPrompt(task, startedAt, i18n));
 			/* Ensure the human message also appears in messagesUi */

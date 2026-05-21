@@ -5,39 +5,31 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { buildSystemPrompt, resolveModelConfig, type AgentConfig, type ModelConfig, type ReasoningEffort } from "../types";
 import { defaultTranslator, type Translator } from "../i18n";
 import { createChatModel } from "./chat-model";
+import { kernel } from "./tools/siyuan-kernel";
 
-async function fetchGuideDoc(docId: string): Promise<string> {
+/** Fetch the guide doc body; returns "" on failure. Kept exported so callers fetch it once and pass it in. */
+export async function fetchGuideDoc(docId: string): Promise<string> {
 	try {
-		const resp = await fetch("/api/export/exportMdContent", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ id: docId }),
-		});
-		const data = await resp.json();
-		const content: string = data?.data?.content || "";
-		return content.trim();
+		const { content } = await kernel.exportApi.mdContent(docId);
+		return (content || "").trim();
 	} catch {
 		return "";
 	}
 }
 
-export async function makeAgent(
+/**
+ * Pure assembly of the agent system prompt. No I/O.
+ * Order: base → guide (only when guideContent non-empty) → defaultNotebook → customInstructions → extraSystemPrompt.
+ */
+export function buildAgentSystemPrompt(
 	config: AgentConfig,
-	tools: StructuredToolInterface[],
-	extraSystemPrompt?: string | null,
-	modelOverride?: ModelConfig | null,
+	guideContent: string,
 	i18n: Translator = defaultTranslator,
-	reasoningEffort: ReasoningEffort = "default",
-) {
-	const mc = modelOverride || resolveModelConfig(config);
-	const model = createChatModel(mc, { streaming: true, reasoningEffort });
-
+	extraSystemPrompt?: string | null,
+): string {
 	let systemPrompt = buildSystemPrompt(i18n);
-	if (config.guideDoc?.id) {
-		const guideContent = await fetchGuideDoc(config.guideDoc.id);
-		if (guideContent) {
-			systemPrompt += `\n\n---\n${i18n.t("agent.guideDocHeader")}\n${guideContent}\n---`;
-		}
+	if (guideContent) {
+		systemPrompt += `\n\n---\n${i18n.t("agent.guideDocHeader")}\n${guideContent}\n---`;
 	}
 	if (config.defaultNotebook?.id) {
 		systemPrompt += `\n\n${i18n.t("agent.defaultNotebook", {
@@ -53,6 +45,28 @@ export async function makeAgent(
 	if (extraSystemPrompt) {
 		systemPrompt += `\n\n${extraSystemPrompt}`;
 	}
+	return systemPrompt;
+}
+
+export interface MakeAgentOptions {
+	extraSystemPrompt?: string | null;
+	modelOverride?: ModelConfig | null;
+	i18n?: Translator;
+	reasoningEffort?: ReasoningEffort;
+	guideContent?: string;
+}
+
+/** Builds the agent. No fetch: guideContent must be supplied by the caller. */
+export function makeAgent(
+	config: AgentConfig,
+	tools: StructuredToolInterface[],
+	opts: MakeAgentOptions = {},
+) {
+	const { extraSystemPrompt, modelOverride, i18n = defaultTranslator, reasoningEffort = "default", guideContent = "" } = opts;
+	const mc = modelOverride || resolveModelConfig(config);
+	const model = createChatModel(mc, { streaming: true, reasoningEffort });
+
+	const systemPrompt = buildAgentSystemPrompt(config, guideContent, i18n, extraSystemPrompt);
 
 	const middleware = [
 		summarizationMiddleware({

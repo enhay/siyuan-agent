@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { getDefaultTools, getLookupTools } from "../src/core/tools";
-import { createEditBlocksTool } from "../src/core/tools/edit-tools";
+import { createEditBlocksTool, createDeleteDocumentTool } from "../src/core/tools/edit-tools";
 
 vi.mock("siyuan", () => ({
 	fetchPost: vi.fn(),
@@ -72,7 +72,7 @@ describe("tool definitions", () => {
 		expect(names).toContain("write_todos");
 	});
 
-	it("delete_document is not in default tools", () => {
+	it("delete_document is excluded by default (autonomous/scheduled toolset)", () => {
 		const names = getDefaultTools(() => ({
 			apiBaseURL: "https://example.com/v1",
 			apiKey: "key",
@@ -80,6 +80,21 @@ describe("tool definitions", () => {
 			customInstructions: "",
 		})).map(t => t.name);
 		expect(names).not.toContain("delete_document");
+	});
+
+	it("delete_document is included only when opted in (interactive chat)", () => {
+		const names = getDefaultTools(
+			() => ({
+				apiBaseURL: "https://example.com/v1",
+				apiKey: "key",
+				model: "model",
+				customInstructions: "",
+			}),
+			() => null,
+			undefined,
+			{ includeDeleteDocument: true },
+		).map(t => t.name);
+		expect(names).toContain("delete_document");
 	});
 
 	it("default tools include scheduled task tools", () => {
@@ -228,6 +243,54 @@ describe("edit_blocks tool", () => {
 				updated: "updated first",
 			}],
 		});
+	});
+});
+
+describe("delete_document tool", () => {
+	it("resolves the target path, deletes it, and reports id/title/path", async () => {
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+			const body = JSON.parse(String(init?.body || "{}"));
+			if (url === "/api/filetree/getHPathByID") {
+				expect(body.id).toBe("doc-1");
+				return mockFetchResponse("/Projects/My Doc") as any;
+			}
+			if (url === "/api/filetree/removeDocByID") {
+				expect(body.id).toBe("doc-1");
+				return mockFetchResponse(null) as any;
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		});
+
+		const tool = createDeleteDocumentTool();
+		const raw = await (tool as any).invoke({ id: "doc-1" });
+
+		expect(fetchMock).toHaveBeenCalledWith("/api/filetree/removeDocByID", expect.anything());
+		expect(JSON.parse(raw)).toEqual({
+			ok: true,
+			id: "doc-1",
+			title: "My Doc",
+			path: "/Projects/My Doc",
+		});
+	});
+
+	it("still deletes and falls back to the id as title when path lookup fails", async () => {
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+			const body = JSON.parse(String(init?.body || "{}"));
+			if (url === "/api/filetree/getHPathByID") {
+				return mockFetchResponse(null, 1) as any; // kernel error → siyuanFetch throws
+			}
+			if (url === "/api/filetree/removeDocByID") {
+				expect(body.id).toBe("doc-2");
+				return mockFetchResponse(null) as any;
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		});
+
+		const tool = createDeleteDocumentTool();
+		const raw = await (tool as any).invoke({ id: "doc-2" });
+
+		expect(fetchMock).toHaveBeenCalledWith("/api/filetree/removeDocByID", expect.anything());
+		expect(JSON.parse(raw)).toEqual({ ok: true, id: "doc-2", title: "doc-2" });
 	});
 });
 

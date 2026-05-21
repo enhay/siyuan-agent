@@ -12,7 +12,7 @@ import {
 	normalizeAgentConfig,
 } from "./types";
 import { ChatPanel } from "./ui/chat-panel";
-import { getDefaultTools } from "./core/tools";
+import { getDefaultTools, type DefaultToolsOptions } from "./core/tools";
 import { SessionStore, createPluginStorage } from "./core/session-store";
 import { ScheduledTaskManager } from "./core/scheduled-task-manager";
 import { McpManager } from "./core/mcp-client";
@@ -43,16 +43,19 @@ export default class SiYuanAgent extends Plugin {
 		// Expose app instance for tools that need it (e.g., openTab)
 		(globalThis as any).siyuanApp = this.app;
 
-		const getTools = () => {
-			const builtinTools = getDefaultTools(() => this.getConfig(), () => this.scheduledTaskManager, this.translator);
+		const buildTools = (opts: DefaultToolsOptions = {}) => {
+			const builtinTools = getDefaultTools(() => this.getConfig(), () => this.scheduledTaskManager, this.translator, opts);
 			const mcpTools = this.mcpManager.getAllTools();
 			return [...builtinTools, ...mcpTools];
 		};
+		// Interactive chat can confirm with the user, so it gets delete_document;
+		// scheduled tasks run unattended, so theirs leaves it out.
+		const getInteractiveTools = () => buildTools({ includeDeleteDocument: true });
 		this.sessionStore = new SessionStore(createPluginStorage(this));
 		this.scheduledTaskManager = new ScheduledTaskManager({
 			store: this.sessionStore,
 			getConfig: () => this.getConfig(),
-			getTools: getTools,
+			getTools: () => buildTools(),
 			i18n: this.translator,
 		});
 
@@ -103,7 +106,7 @@ export default class SiYuanAgent extends Plugin {
 					this.chatPanel = new ChatPanel(
 						dock.element.querySelector(".fn__flex-1"),
 						this,
-						getTools(),
+						getInteractiveTools(),
 						this.sessionStore,
 						this.scheduledTaskManager,
 						this.translator,
@@ -123,7 +126,7 @@ export default class SiYuanAgent extends Plugin {
 					this.chatPanel = new ChatPanel(
 						custom.element.querySelector(".fn__flex-1"),
 						this,
-						getTools(),
+						getInteractiveTools(),
 						this.sessionStore,
 						this.scheduledTaskManager,
 						this.translator,

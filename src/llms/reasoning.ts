@@ -1,4 +1,5 @@
 import type { BaseMessage } from "@langchain/core/messages";
+import { messageKind, messageReasoning } from "../core/message-shape";
 
 export interface ModelProfile {
 	maxInputTokens?: number;
@@ -25,18 +26,6 @@ export const DEEPSEEK_PROFILES: Record<string, ModelProfile> = {
 	},
 };
 
-function getMessageType(message: BaseMessage): string {
-	return typeof (message as any)?._getType === "function"
-		? (message as any)._getType()
-		: String((message as any)?.type || "");
-}
-
-function getReasoningContent(message: BaseMessage): string {
-	const reasoning = (message as any)?.additional_kwargs?.reasoning_content
-		?? (message as any)?.kwargs?.additional_kwargs?.reasoning_content;
-	return typeof reasoning === "string" ? reasoning : "";
-}
-
 export function injectReasoningContent<T extends { messages?: any[] }>(
 	request: T,
 	sourceMessages: BaseMessage[] | null | undefined,
@@ -48,9 +37,8 @@ export function injectReasoningContent<T extends { messages?: any[] }>(
 		const requestMessage = nextMessages[requestIndex];
 		requestIndex += 1;
 		if (!requestMessage || requestMessage.role !== "assistant") continue;
-		const sourceType = getMessageType(sourceMessage);
-		if (sourceType !== "ai" && sourceType !== "AIMessageChunk") continue;
-		const reasoning = getReasoningContent(sourceMessage);
+		if (messageKind(sourceMessage) !== "ai") continue;
+		const reasoning = messageReasoning(sourceMessage);
 		if (reasoning) {
 			requestMessage.reasoning_content = reasoning;
 		}

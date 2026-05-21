@@ -1,6 +1,7 @@
 import { HumanMessage } from "@langchain/core/messages";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { AgentState, CompactionState } from "../types";
+import { messageKind, messageContent } from "./message-shape";
 
 const COMPACT_SUMMARY_PROMPT = `You are a conversation summariser for a note-taking AI assistant.
 Below is the existing summary (if any) followed by new conversation turns.
@@ -28,28 +29,11 @@ Rules:
 
 Updated summary:`;
 
-function msgType(m: any): string {
-	if (typeof m?._getType === "function") return m._getType();
-	if (m?.lc === 1 && Array.isArray(m.id)) {
-		const cls = m.id[m.id.length - 1] as string;
-		if (cls === "HumanMessage") return "human";
-		if (cls === "AIMessage" || cls === "AIMessageChunk") return "ai";
-		if (cls === "SystemMessage") return "system";
-		if (cls === "ToolMessage") return "tool";
-	}
-	return m?.type ?? m?.role ?? "";
-}
-
-function getContent(m: any): string {
-	const c = m?.kwargs?.content ?? m?.content;
-	return typeof c === "string" ? c : "";
-}
-
 /** Count total characters across all messages. */
 function charCount(messages: any[]): number {
 	let total = 0;
 	for (const m of messages) {
-		total += getContent(m).length;
+		total += messageContent(m).length;
 		const tc = m?.kwargs?.tool_calls ?? m?.tool_calls;
 		if (Array.isArray(tc)) {
 			total += JSON.stringify(tc).length;
@@ -66,7 +50,7 @@ function splitTurns(messages: any[]): any[][] {
 	const turns: any[][] = [];
 	let current: any[] = [];
 	for (const m of messages) {
-		const t = msgType(m);
+		const t = messageKind(m);
 		if ((t === "human" || t === "user") && current.length > 0) {
 			turns.push(current);
 			current = [];
@@ -81,8 +65,8 @@ function turnsToText(turns: any[][]): string {
 	const lines: string[] = [];
 	for (const turn of turns) {
 		for (const m of turn) {
-			const t = msgType(m);
-			const c = getContent(m);
+			const t = messageKind(m);
+			const c = messageContent(m);
 			if (t === "human" || t === "user") {
 				lines.push(`User: ${c}`);
 			} else if (t === "ai") {
