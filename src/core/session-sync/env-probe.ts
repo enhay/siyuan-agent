@@ -5,6 +5,8 @@
  *  `require` is reachable, then picks one of three runtime tiers. Pure helpers are
  *  injectable for tests. See plan §4/§5/§17. */
 
+import { hasNode } from "./node-require";
+
 export type Container = "std" | "docker" | "android" | "ios" | "harmony" | "unknown";
 export type Os = "windows" | "darwin" | "linux" | "unknown";
 export type SyncTier = "in-plugin" | "sidecar" | "viewer";
@@ -38,11 +40,10 @@ export function readSystemConfig(): SystemConfig {
 	return sys ?? {};
 }
 
-/** Whether an Electron-style `require` is reachable (desktop only). */
+/** Whether the runtime's native `require` is reachable (desktop Electron only).
+ *  SiYuan exposes a bare `require`, not `window.require` — see `node-require.ts`. */
 export function hasNodeRequire(): boolean {
-	const g = globalThis as { require?: unknown };
-	const w = typeof window !== "undefined" ? (window as { require?: unknown }) : undefined;
-	return typeof g.require === "function" || typeof w?.require === "function";
+	return hasNode();
 }
 
 export function detectEnvironment(

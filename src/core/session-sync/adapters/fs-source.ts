@@ -10,6 +10,7 @@
 
 import type { DiscoveredFile, FileSource } from "../engine/ports";
 import type { SessionSource } from "../engine/types";
+import { getNodeRequire } from "../node-require";
 
 export interface FsPromisesLike {
 	readdir(path: string, opts: { withFileTypes: true }): Promise<Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>>;
@@ -32,10 +33,8 @@ interface Gathered {
 }
 
 function defaultFsPromises(): FsPromisesLike {
-	const req =
-		(globalThis as unknown as { require?: (m: string) => unknown }).require ??
-		(typeof window !== "undefined" ? (window as unknown as { require?: (m: string) => unknown }).require : undefined);
-	if (typeof req !== "function") {
+	const req = getNodeRequire();
+	if (!req) {
 		throw new Error("Node fs unavailable — session sync in-plugin reader is desktop-only");
 	}
 	return (req("fs") as { promises: FsPromisesLike }).promises;
