@@ -71,6 +71,26 @@ describe("identity helpers", () => {
 		expect(inferTitle(none)).toBe("proj codex session zzzz");
 	});
 
+	it("inferTitle strips a leading slash-command and skips bare slash commands", () => {
+		expect(inferTitle(makeSession({ messages: [{ role: "user", text: "/loop summarize yesterday", timestamp: "t" }] }))).toBe("summarize yesterday");
+		// bare slash command → skip to next substantive user message
+		expect(
+			inferTitle(
+				makeSession({
+					messages: [
+						{ role: "user", text: "/clear", timestamp: "t1" },
+						{ role: "assistant", text: "ok", timestamp: "t2" },
+						{ role: "user", text: "fix the parser", timestamp: "t3" },
+					],
+				}),
+			),
+		).toBe("fix the parser");
+	});
+
+	it("inferTitle does NOT over-strip a leading path (S1)", () => {
+		expect(inferTitle(makeSession({ messages: [{ role: "user", text: "/etc/hosts is broken", timestamp: "t" }] }))).toBe("/etc/hosts is broken");
+	});
+
 	it("contentHash is sha256-prefixed, stable, and change-sensitive", async () => {
 		const h1 = await contentHash("abc");
 		const h2 = await contentHash("abc");

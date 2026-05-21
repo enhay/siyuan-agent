@@ -7,6 +7,12 @@
 import type { NormalizedSession, ToolActivity } from "./types";
 import { inferTitle, projectSlug } from "./identity";
 
+/** Block-ref anchors are delimited by double quotes; a `"` in the title would
+ *  terminate the ref early, so swap quotes for safe lookalikes. */
+function refAnchor(title: string): string {
+	return title.replace(/"/g, "'").replace(/[\r\n]+/g, " ").trim();
+}
+
 function formatTool(tool: ToolActivity): string {
 	const mark = tool.status === "failure" ? "x" : "v";
 	return `- [${mark}] **${tool.kind}:** ${tool.summary}`;
@@ -49,13 +55,24 @@ export function renderSession(session: NormalizedSession, options: RenderOptions
 	lines.push(`| 失败工具调用 | ${failed.length} |`);
 	if (session.cwd) lines.push(`| cwd | \`${session.cwd}\` |`);
 	if (session.model) lines.push(`| model | ${session.model} |`);
+	const subs = options.subAgents ?? [];
+	if (subs.length > 0) {
+		const childTools = subs.reduce((n, s) => n + (s.toolCount ?? 0), 0);
+		const childFailed = subs.reduce((n, s) => n + (s.failedToolCount ?? 0), 0);
+		lines.push(`| 子代理数 | ${subs.length} |`);
+		lines.push(`| 子代理工具合计 | ${childTools} (失败 ${childFailed}) |`);
+	}
 	lines.push("");
 
-	if (options.subAgents && options.subAgents.length > 0) {
+	if (subs.length > 0) {
 		lines.push("## 子代理", "");
-		for (const sub of options.subAgents) {
-			const label = sub.nickname ? `${sub.role ?? "agent"} · ${sub.nickname}` : sub.role ?? "agent";
-			lines.push(`- ((${sub.docId} "${sub.title}")) — ${label}`);
+		const labelCounts = new Map<string, number>();
+		for (const sub of subs) {
+			const base = sub.nickname ? `${sub.role ?? "agent"} · ${sub.nickname}` : sub.role ?? "agent";
+			const seen = (labelCounts.get(base) ?? 0) + 1;
+			labelCounts.set(base, seen);
+			const label = seen === 1 ? base : `${base} (${seen})`; // de-dup identical labels
+			lines.push(`- ((${sub.docId} "${refAnchor(sub.title)}")) — ${label}`);
 		}
 		lines.push("");
 	}

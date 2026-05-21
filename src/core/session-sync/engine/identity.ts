@@ -60,11 +60,26 @@ export function buildSiyuanDocPath(rootPath: string, session: NormalizedSession)
 	return `${root.replace(/\/+$/, "")}/${year}/${month}/${day}/${leaf}`;
 }
 
-/** Deterministic title fallback: first substantive user message, truncated. */
+/** Normalize a candidate title: collapse whitespace, strip a leading slash-command
+ *  token (e.g. `/loop summarize` → `summarize`). */
+function cleanTitleText(text: string): string {
+	// Strip a leading slash-command token only when it's a whole word (followed by
+	// whitespace or end) — not a path like "/etc/hosts is broken".
+	return text
+		.replace(/\s+/g, " ")
+		.trim()
+		.replace(/^\/[\w:-]+(?=\s|$)\s*/, "")
+		.trim();
+}
+
+/** Deterministic title: first substantive user message (skipping bare slash
+ *  commands), truncated; falls back to a project/source/id label. */
 export function inferTitle(session: NormalizedSession): string {
-	const firstUser = session.messages.find((m) => m.role === "user");
-	const text = firstUser?.text.replace(/\s+/g, " ").trim();
-	if (text) return text.length <= 80 ? text : `${text.slice(0, 77)}...`;
+	for (const message of session.messages) {
+		if (message.role !== "user") continue;
+		const cleaned = cleanTitleText(message.text);
+		if (cleaned.length >= 3) return cleaned.length <= 80 ? cleaned : `${cleaned.slice(0, 77)}...`;
+	}
 	return `${projectSlug(session.cwd)} ${session.source} session ${shortSessionId(session.sessionId)}`;
 }
 

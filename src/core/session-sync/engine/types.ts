@@ -74,6 +74,8 @@ export interface SessionRecord {
 	failedToolCount?: number;
 	lastSourceOffset?: number;
 	lastWrittenAt?: string;
+	/** Parent doc id this child has been moved under (idempotency for aggregation). */
+	movedUnderParent?: string;
 }
 
 export interface SyncState {
