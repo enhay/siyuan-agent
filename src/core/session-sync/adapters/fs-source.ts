@@ -61,6 +61,7 @@ async function walkJsonl(fs: FsPromisesLike, dir: string, out: string[]): Promis
 
 export function createFsSource(config: FsSourceConfig, fs: FsPromisesLike = defaultFsPromises()): FileSource {
 	async function gather(): Promise<Gathered[]> {
+		const t0 = Date.now();
 		const cutoff = Date.now() - config.backfillDays * 24 * 60 * 60 * 1000;
 		const all: Gathered[] = [];
 		const roots: Array<{ source: SessionSource; root: string }> = [];
@@ -84,7 +85,9 @@ export function createFsSource(config: FsSourceConfig, fs: FsPromisesLike = defa
 		}
 
 		all.sort((a, b) => b.mtimeMs - a.mtimeMs);
-		return all.slice(0, config.backfillLimit);
+		const kept = all.slice(0, config.backfillLimit);
+		console.log(`[session-sync] scan: ${all.length} in-window files in ${Date.now() - t0}ms, kept ${kept.length}`);
+		return kept;
 	}
 
 	return {

@@ -37,10 +37,15 @@ export interface SessionSyncManagerDeps {
 	clearTimer?: (handle: ReturnType<typeof setInterval>) => void;
 }
 
+/** If a run has been "running" longer than this, assume it hung and let a new run
+ *  proceed — prevents the re-entrancy guard from wedging the manager forever. */
+const STALE_RUN_MS = 5 * 60 * 1000;
+
 export class SessionSyncManager {
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private lastSignature: string | null = null;
 	private status: SyncStatus = { state: "idle", running: false };
+	private runStartedAt = 0;
 
 	constructor(private readonly deps: SessionSyncManagerDeps) {}
 
@@ -82,7 +87,11 @@ export class SessionSyncManager {
 	}
 
 	private async tick(force = false): Promise<ReconcileResult | undefined> {
-		if (this.status.running) return undefined; // re-entrancy guard
+		if (this.status.running) {
+			const elapsed = this.now() - this.runStartedAt;
+			if (elapsed < STALE_RUN_MS) return undefined; // genuinely busy
+			console.warn(`[session-sync] previous run looks stuck (${elapsed}ms) — proceeding`);
+		}
 		const config = this.deps.getConfig();
 		if (!config.enabled) {
 			this.status = { ...this.status, state: "disabled", running: false };
@@ -104,9 +113,13 @@ export class SessionSyncManager {
 			}
 
 			this.status = { ...this.status, state: "syncing", running: true };
+			this.runStartedAt = this.now();
 			this.emit();
 
+			console.log("[session-sync] reconcile start", { force });
+			const t0 = Date.now();
 			const result = await runner.reconcile();
+			console.log(`[session-sync] reconcile done in ${Date.now() - t0}ms`, result);
 			if (force) this.lastSignature = await runner.probe().catch(() => this.lastSignature);
 
 			this.status = {
