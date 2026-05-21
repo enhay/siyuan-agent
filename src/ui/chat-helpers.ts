@@ -30,7 +30,7 @@ export interface ActivityBlockRefs {
 	archiveListEl: HTMLElement;
 }
 
-export type SettingsSection = "general" | "model-services" | "default-models" | "mcp" | "tracing";
+export type SettingsSection = "general" | "model-services" | "default-models" | "mcp" | "tracing" | "session-sync";
 
 export interface ComposerKeyEvent {
 	key: string;
@@ -52,6 +52,7 @@ export interface SettingsDraft {
 	subAgentModelId: string;
 	mcpServers: McpServerConfig[];
 	notebookOptions: Array<{ id: string; name: string }>;
+	sessionSync: import("../core/session-sync/config").SessionSyncConfig;
 }
 
 /* ── Pure functions ──────────────────────────────────────────────────── */
