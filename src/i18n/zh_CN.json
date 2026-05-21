@@ -348,5 +348,8 @@
   "settings.sessionSync.never": "尚未同步",
   "settings.sessionSync.aiTitle": "用 AI 生成标题",
   "settings.sessionSync.aiTitleModel": "AI 标题模型",
-  "settings.sessionSync.aiTitleModelDefault": "— 默认模型 —"
+  "settings.sessionSync.aiTitleModelDefault": "— 默认模型 —",
+  "settings.sessionSync.testPaths": "检测路径",
+  "settings.sessionSync.syncNow": "立即同步",
+  "sessionSync.testResult": "可读取 — Codex {codex} 个、Claude {claude} 个会话文件"
 }

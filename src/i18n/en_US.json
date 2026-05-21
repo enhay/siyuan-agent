@@ -348,5 +348,8 @@
   "settings.sessionSync.never": "Not synced yet",
   "settings.sessionSync.aiTitle": "Generate titles with AI",
   "settings.sessionSync.aiTitleModel": "AI title model",
-  "settings.sessionSync.aiTitleModelDefault": "— default model —"
+  "settings.sessionSync.aiTitleModelDefault": "— default model —",
+  "settings.sessionSync.testPaths": "Test paths",
+  "settings.sessionSync.syncNow": "Sync now",
+  "sessionSync.testResult": "Reachable — Codex {codex}, Claude {claude} session files"
 }

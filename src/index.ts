@@ -21,6 +21,7 @@ import { buildSyncRunner } from "./core/session-sync/runner";
 import { normalizeSessionSyncConfig, type SessionSyncConfig } from "./core/session-sync/config";
 import { detectEnvironment } from "./core/session-sync/env-probe";
 import { createTitleProvider } from "./core/session-sync/adapters/title-provider";
+import { createFsSource } from "./core/session-sync/adapters/fs-source";
 import type { SyncRunner } from "./core/session-sync/manager";
 import { createChatModel } from "./core/chat-model";
 import { McpManager } from "./core/mcp-client";
@@ -258,7 +259,7 @@ export default class SiYuanAgent extends Plugin {
 		return buildSyncRunner(ss, this, titleProvider);
 	}
 
-	private async runSessionSyncNow(): Promise<void> {
+	async runSessionSyncNow(): Promise<void> {
 		showMessage(this.translator.t("sessionSync.syncing"));
 		const result = await this.sessionSyncManager.syncNow();
 		if (!result) {
@@ -272,6 +273,24 @@ export default class SiYuanAgent extends Plugin {
 		showMessage(
 			this.translator.t("sessionSync.done", { created: result.newSessions, updated: result.updatedSessions }),
 		);
+	}
+
+	/** Probe whether the configured source paths are readable; report counts via toast. */
+	async testSessionSyncPaths(): Promise<void> {
+		const ss = this.getSessionSyncConfig();
+		try {
+			const files = await createFsSource({
+				sources: ss.sources,
+				sourcePaths: ss.sourcePaths,
+				backfillDays: ss.backfillDays,
+				backfillLimit: ss.backfillLimit,
+			}).list();
+			const codex = files.filter((f) => f.source === "codex").length;
+			const claude = files.filter((f) => f.source === "claude").length;
+			showMessage(this.translator.t("sessionSync.testResult", { codex, claude }));
+		} catch {
+			showMessage(this.translator.t("sessionSync.unavailable"), 6000, "error");
+		}
 	}
 
 	uninstall() {

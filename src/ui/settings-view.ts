@@ -47,6 +47,10 @@ export interface ChatPanelHost {
 	queryDocs: (keyword: string) => Promise<Array<{ id: string; title: string }>>;
 	/** Called after config is persisted – handle MCP reconnection + tool rebuild. */
 	onConfigSaved: (nextConfig: AgentConfig) => Promise<void>;
+	/** Run a session sync now (delegates to the SessionSyncManager). */
+	syncSessionsNow: () => Promise<void>;
+	/** Probe whether the configured source paths are readable; reports via toast. */
+	testSessionSyncPaths: () => Promise<void>;
 }
 
 /* ── Context interface ───────────────────────────────────────────────── */
@@ -305,6 +309,10 @@ export class SettingsView {
 							${configuredModels.map((m) => `<option value="${escapeHtml(m.id)}"${m.id === draft.sessionSync.aiTitle.modelId ? " selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}
 						</select>
 					</label>
+					<div style="display:flex;gap:8px;margin-top:8px">
+						<button class="b3-button b3-button--outline" type="button" data-action="ss-test-paths">${escapeHtml(this.t("settings.sessionSync.testPaths"))}</button>
+						<button class="b3-button" type="button" data-action="ss-sync-now">${escapeHtml(this.t("settings.sessionSync.syncNow"))}</button>
+					</div>
 					<div style="opacity:.7;font-size:12px;margin-top:8px">${ssLastSyncAt ? escapeHtml(this.t("settings.sessionSync.lastSync", { time: new Date(ssLastSyncAt).toLocaleString() })) : escapeHtml(this.t("settings.sessionSync.never"))}</div>
 				</section>
 			</div>
@@ -666,6 +674,19 @@ export class SettingsView {
 			this.syncDraftFromForm();
 			this.draft.guideDoc = null;
 			void this.render();
+		});
+
+		// Session-sync buttons: persist current edits first so the run/test uses them.
+		this.ctx.settingsViewEl.querySelector<HTMLElement>("[data-action='ss-test-paths']")?.addEventListener("click", async (e) => {
+			const form = (e.currentTarget as HTMLElement).closest("form");
+			if (form instanceof HTMLFormElement) await this.saveForm(form);
+			await this.ctx.host.testSessionSyncPaths();
+		});
+		this.ctx.settingsViewEl.querySelector<HTMLElement>("[data-action='ss-sync-now']")?.addEventListener("click", async (e) => {
+			const form = (e.currentTarget as HTMLElement).closest("form");
+			if (form instanceof HTMLFormElement) await this.saveForm(form);
+			await this.ctx.host.syncSessionsNow();
+			await this.render(); // refresh last-sync line
 		});
 	}
 

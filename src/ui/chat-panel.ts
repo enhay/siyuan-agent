@@ -2299,4 +2299,14 @@ export class ChatPanel implements ChatPanelHost {
 	public async openTaskEditor(task?: ScheduledTaskMeta): Promise<void> {
 		await this.tasksView.openTaskEditor(task);
 	}
+
+	/** ChatPanelHost: run a session sync now (delegates to the plugin's manager). */
+	public async syncSessionsNow(): Promise<void> {
+		await (this.plugin as unknown as { runSessionSyncNow?: () => Promise<void> }).runSessionSyncNow?.();
+	}
+
+	/** ChatPanelHost: probe configured source-path reachability (delegates to plugin). */
+	public async testSessionSyncPaths(): Promise<void> {
+		await (this.plugin as unknown as { testSessionSyncPaths?: () => Promise<void> }).testSessionSyncPaths?.();
+	}
 }
