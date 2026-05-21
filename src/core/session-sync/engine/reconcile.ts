@@ -8,12 +8,13 @@
  *  overwrites the body via the writer's clear-children+append (kernel `updateBlock`
  *  only keeps FirstChild). See plan §8. */
 
-import type { DiscoveredFile, FileSource, SiyuanWriter, StateStore } from "./ports";
+import type { DiscoveredFile, FileSource, SiyuanWriter, StateStore, TitleProvider } from "./ports";
 import type { NormalizedSession, ReconcileResult, SessionRecord, SyncState } from "./types";
 import { parseCodexSession } from "./parse/codex";
 import { parseClaudeSession } from "./parse/claude";
 import { renderSession } from "./render";
 import { buildSiyuanAttrs, buildSiyuanDocPath, contentHash, fileKey, inferTitle, sessionKey } from "./identity";
+import { inferStatus } from "./status";
 import { collectChildLinks, pendingChildMoves, type ChildLink } from "./aggregate";
 
 export interface ReconcileDeps {
@@ -23,6 +24,28 @@ export interface ReconcileDeps {
 	notebookId: string;
 	rootPath: string;
 	now?: () => number;
+	/** When set with aiTitleEnabled, generate readable titles via the model registry. */
+	titleProvider?: TitleProvider;
+	aiTitleEnabled?: boolean;
+}
+
+/** Title precedence: an existing AI title is sticky (never reverts on toggle-off);
+ *  otherwise generate once when AI is enabled, falling back to the heuristic. */
+async function resolveTitle(
+	deps: ReconcileDeps,
+	session: NormalizedSession,
+	existing: SessionRecord | undefined,
+): Promise<{ title: string; titleSource: "ai" | "heuristic" }> {
+	if (existing?.titleSource === "ai" && existing.title) {
+		return { title: existing.title, titleSource: "ai" };
+	}
+	if (deps.aiTitleEnabled && deps.titleProvider) {
+		const ai = await deps.titleProvider
+			.generate({ title: inferTitle(session), firstUserMessage: session.messages.find((m) => m.role === "user")?.text })
+			.catch(() => undefined);
+		if (ai && ai.trim()) return { title: ai.trim(), titleSource: "ai" };
+	}
+	return { title: inferTitle(session), titleSource: "heuristic" };
 }
 
 function parseFile(file: DiscoveredFile, content: string): NormalizedSession {
@@ -37,6 +60,7 @@ function toRecord(
 	path: string,
 	hash: string,
 	title: string,
+	titleSource: "ai" | "heuristic",
 	sizeBytes: number | undefined,
 	now: number,
 ): SessionRecord {
@@ -45,7 +69,7 @@ function toRecord(
 		docId,
 		path,
 		title,
-		titleSource: "heuristic",
+		titleSource,
 		contentHash: hash,
 		source: session.source,
 		sessionId: session.sessionId,
@@ -75,9 +99,12 @@ async function upsert(
 ): Promise<void> {
 	const key = sessionKey(session);
 	const stateKey = fileKey(file.source, file.path);
-	const markdown = renderSession(session, childLinks.length > 0 ? { subAgents: childLinks } : {});
-	const hash = await contentHash(markdown);
 	const existing = state.sessions[key];
+	const now = deps.now ? deps.now() : Date.now();
+	const status = inferStatus(session, now);
+	const { title, titleSource } = await resolveTitle(deps, session, existing);
+	const markdown = renderSession(session, { title, status, subAgents: childLinks.length > 0 ? childLinks : undefined });
+	const hash = await contentHash(markdown);
 
 	const refreshCursor = () => {
 		state.files[stateKey] = { offset: file.sizeBytes ?? 0, mtimeMs: file.mtimeMs, sessionKey: key };
@@ -106,14 +133,12 @@ async function upsert(
 		isNew = true;
 	}
 
-	const title = inferTitle(session);
 	// Always set the readable title on a fresh doc (its file-tree name is the slug
 	// path leaf until renamed); otherwise only when it actually changed (anti-churn).
 	if (isNew || title !== existing?.title) await deps.writer.renameDoc({ docId, title });
-	await deps.writer.setAttrs({ docId, attrs: buildSiyuanAttrs(session, { hash, title, titleSource: "heuristic" }) });
+	await deps.writer.setAttrs({ docId, attrs: buildSiyuanAttrs(session, { hash, title, titleSource, status }) });
 
-	const now = deps.now ? deps.now() : Date.now();
-	const record = toRecord(session, docId, buildSiyuanDocPath(deps.rootPath, session), hash, title, file.sizeBytes, now);
+	const record = toRecord(session, docId, buildSiyuanDocPath(deps.rootPath, session), hash, title, titleSource, file.sizeBytes, now);
 	record.movedUnderParent = existing?.movedUnderParent; // preserve aggregation flag
 	state.sessions[key] = record;
 	refreshCursor();

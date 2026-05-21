@@ -11,8 +11,13 @@ import { reconcileOnce } from "./engine/reconcile";
 import { decideTier, detectEnvironment } from "./env-probe";
 import type { SessionSyncConfig } from "./config";
 import type { SyncRunner } from "./manager";
+import type { TitleProvider } from "./engine/ports";
 
-export function buildSyncRunner(config: SessionSyncConfig, plugin: DataPlugin): SyncRunner | null {
+export function buildSyncRunner(
+	config: SessionSyncConfig,
+	plugin: DataPlugin,
+	titleProvider?: TitleProvider,
+): SyncRunner | null {
 	if (!config.enabled || !config.notebookId) return null;
 	if (decideTier(detectEnvironment()) !== "in-plugin") return null;
 
@@ -28,12 +33,15 @@ export function buildSyncRunner(config: SessionSyncConfig, plugin: DataPlugin): 
 		return null; // Node fs unavailable
 	}
 
+	const aiTitleEnabled = config.aiTitle.enabled && !!titleProvider;
 	const deps = {
 		files,
 		writer: createSiyuanWriter(),
 		state: createPluginStateStore(plugin),
 		notebookId: config.notebookId,
 		rootPath: config.rootPath,
+		titleProvider: aiTitleEnabled ? titleProvider : undefined,
+		aiTitleEnabled,
 	};
 
 	return {

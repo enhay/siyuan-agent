@@ -88,7 +88,7 @@ export function inferTitle(session: NormalizedSession): string {
  *  so SiYuan does not store empty attrs. */
 export function buildSiyuanAttrs(
 	session: NormalizedSession,
-	meta: { hash: string; title: string; titleSource: "ai" | "heuristic" },
+	meta: { hash: string; title: string; titleSource: "ai" | "heuristic"; status?: string },
 ): Record<string, string> {
 	const failed = session.toolActivities.filter((t) => t.status === "failure").length;
 	const attrs: Record<string, string> = {
@@ -96,7 +96,7 @@ export function buildSiyuanAttrs(
 		"custom-ai-session-id": session.sessionId,
 		"custom-ai-session-key": sessionKey(session),
 		"custom-ai-project": projectSlug(session.cwd),
-		"custom-ai-status": "completed",
+		"custom-ai-status": meta.status ?? "completed",
 		"custom-ai-title": meta.title,
 		"custom-ai-title-source": meta.titleSource,
 		"custom-ai-message-count": String(session.messages.length),

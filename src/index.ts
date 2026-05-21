@@ -10,6 +10,7 @@ import {
 	AgentConfig,
 	DEFAULT_CONFIG,
 	normalizeAgentConfig,
+	resolveModelConfig,
 } from "./types";
 import { ChatPanel } from "./ui/chat-panel";
 import { getDefaultTools, type DefaultToolsOptions } from "./core/tools";
@@ -19,6 +20,9 @@ import { SessionSyncManager } from "./core/session-sync/manager";
 import { buildSyncRunner } from "./core/session-sync/runner";
 import { normalizeSessionSyncConfig, type SessionSyncConfig } from "./core/session-sync/config";
 import { detectEnvironment } from "./core/session-sync/env-probe";
+import { createTitleProvider } from "./core/session-sync/adapters/title-provider";
+import type { SyncRunner } from "./core/session-sync/manager";
+import { createChatModel } from "./core/chat-model";
 import { McpManager } from "./core/mcp-client";
 import { createTranslator, type Translator } from "./i18n";
 
@@ -65,7 +69,7 @@ export default class SiYuanAgent extends Plugin {
 		});
 		this.sessionSyncManager = new SessionSyncManager({
 			getConfig: () => this.getSessionSyncConfig(),
-			getRunner: () => buildSyncRunner(this.getSessionSyncConfig(), this),
+			getRunner: () => this.buildSessionSyncRunner(),
 			onSynced: async () => {
 				const cfg = this.getConfig();
 				const nextSync = { ...(cfg.sessionSync ?? {}), lastSyncAt: Date.now() };
@@ -242,6 +246,20 @@ export default class SiYuanAgent extends Plugin {
 
 	private getSessionSyncConfig(): SessionSyncConfig {
 		return normalizeSessionSyncConfig(detectEnvironment(), this.getConfig().sessionSync);
+	}
+
+	private buildSessionSyncRunner(): SyncRunner | null {
+		const ss = this.getSessionSyncConfig();
+		let titleProvider;
+		if (ss.aiTitle.enabled) {
+			try {
+				const model = createChatModel(resolveModelConfig(this.getConfig(), ss.aiTitle.modelId));
+				titleProvider = createTitleProvider(model as unknown as Parameters<typeof createTitleProvider>[0]);
+			} catch {
+				titleProvider = undefined; // model unavailable → heuristic titles
+			}
+		}
+		return buildSyncRunner(ss, this, titleProvider);
 	}
 
 	private async runSessionSyncNow(): Promise<void> {

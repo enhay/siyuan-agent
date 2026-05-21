@@ -1,6 +1,6 @@
 # Session Sync Plan — AI 会话日志同步进 SiYuan
 
-> Status: Planned · 已经子代理 review 并修正 (2026-05-21)。在 `../test/ailogger`（路径 `/home/zhaohua/code/test/ailogger`）
+> Status: 实现中 · Phase 1–6 已落地（引擎核心/适配器/env-probe/manager+设置 UI/子代理汇聚+标题/AI 标题+状态），每阶段经子代理 review 并提交于分支 `feat/session-sync`，342 测试绿。延后项见 §14 Phase 6。在 `../test/ailogger`（路径 `/home/zhaohua/code/test/ailogger`）
 > 及其 `docs/superpowers/plans/2026-04-30-siyuan-incremental-sync-plugin.md` 基础上延续，
 > 把"独立 CLI 同步器"演进为 **siyuan-agent 插件内的自适配 session 同步子系统**，并补全
 > ailogger Siyuan 目标尚缺的 **子代理汇聚** 与 **session 标题** 能力。
@@ -227,7 +227,10 @@ ailogger 已在 Obsidian 路径实现 codex 父子分组（`findParent` / 文件
 - **Phase 3**：`env-probe` 能力层 + 源路径可配列表（按 OS/homeDir 默认 + WSL 模板 + "测试可达"）+ 优雅降级三档。
 - **Phase 4**：`SessionSyncManager` 变更检测轮询 + 节流 + "立即同步"命令 + 设置面板 + 状态展示。
 - **Phase 5（本次重点补全）**：子代理汇聚（§10）+ session 标题（§11）。
-- **Phase 6（后续）**：AI 摘要（§12）；sidecar 适配器一等公民化 + 插件生成命令 + **单 writer 互斥**（与插件内并发防护）；active/idle/completed 状态；大会话拆分。
+- **Phase 6**：✅ AI 标题（model registry，sticky/回退，§11/§12）+ active/idle/completed 状态推断（§13）已落地。
+  - **单 writer 互斥**：kernel 无 CAS → 不做脆弱的分布式锁。改为**结构性单写者**：env-probe 的 tier 使一台机器要么插件内、要么 sidecar（互斥），插件内再由 manager 重入守卫防自重叠；同机同时手动跑 sidecar + 启用插件内为**不支持**配置（UI tierNote 已引导）。完整 kernel-lease 显式延后。
+  - **sidecar 一等公民**：ailogger 即 sidecar；插件"生成命令"的 tier-2 UI（plan §17.2 态②）延后，架构已支持直接运行 ailogger。
+  - 大会话拆分：延后。
 
 MVP 明确不做：块级 diff、append-only、Obsidian 兼容、用户编辑保留、大会话拆分。
 

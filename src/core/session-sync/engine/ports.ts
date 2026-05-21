@@ -52,3 +52,9 @@ export interface StateStore {
 	load(): Promise<SyncState>;
 	save(state: SyncState): Promise<void>;
 }
+
+/** Optional AI title generator (backed by the plugin's model registry). Returns
+ *  undefined on failure/unavailable so the engine falls back to the heuristic. */
+export interface TitleProvider {
+	generate(input: { title: string; firstUserMessage?: string; summary?: string }): Promise<string | undefined>;
+}

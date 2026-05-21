@@ -30,8 +30,10 @@ function isHighSignalTool(tool: ToolActivity): boolean {
 export interface RenderOptions {
 	/** Display title (H1). Defaults to the heuristic `inferTitle`. */
 	title?: string;
+	/** Lifecycle status shown in the overview. Defaults to "completed". */
+	status?: string;
 	/** Sub-agent links to inject under a "## 子代理" section (Phase 5). */
-	subAgents?: Array<{ title: string; role?: string; nickname?: string; docId: string }>;
+	subAgents?: Array<{ title: string; role?: string; nickname?: string; docId: string; toolCount?: number; failedToolCount?: number }>;
 }
 
 export function renderSession(session: NormalizedSession, options: RenderOptions = {}): string {
@@ -47,7 +49,7 @@ export function renderSession(session: NormalizedSession, options: RenderOptions
 	lines.push(`| 来源 | ${session.source} |`);
 	lines.push(`| 项目 | ${projectSlug(session.cwd)} |`);
 	if (session.isSubAgent) lines.push(`| 角色 | ${session.agentRole ?? "sub-agent"}${session.agentNickname ? ` (${session.agentNickname})` : ""} |`);
-	lines.push(`| 状态 | completed |`);
+	lines.push(`| 状态 | ${options.status ?? "completed"} |`);
 	lines.push(`| 创建时间 | ${session.createdAt} |`);
 	lines.push(`| 更新时间 | ${session.updatedAt} |`);
 	lines.push(`| 消息数 | ${session.messages.length} |`);
