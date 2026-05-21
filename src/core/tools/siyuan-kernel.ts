@@ -24,6 +24,10 @@ export interface SiyuanKernel {
 		append: (req: { data: string; parentID: string; dataType?: string }) => Promise<any>;
 		delete: (id: string) => Promise<any>;
 	};
+	attr: {
+		setBlockAttrs: (id: string, attrs: Record<string, string>) => Promise<any>;
+		getBlockAttrs: (id: string) => Promise<Record<string, string>>;
+	};
 	filetree: {
 		createDocWithMd: (req: { notebook: string; path: string; markdown: string }) => Promise<string>;
 		moveDocsByID: (fromIDs: string[], toID: string) => Promise<any>;
@@ -72,6 +76,10 @@ export function makeKernel(fetch: KernelFetcher = siyuanFetch): SiyuanKernel {
 			append: ({ dataType = "markdown", ...rest }) =>
 				fetch("/api/block/appendBlock", { dataType, ...rest }),
 			delete: (id) => fetch("/api/block/deleteBlock", { id }),
+		},
+		attr: {
+			setBlockAttrs: (id, attrs) => fetch("/api/attr/setBlockAttrs", { id, attrs }),
+			getBlockAttrs: (id) => fetch("/api/attr/getBlockAttrs", { id }),
 		},
 		filetree: {
 			createDocWithMd: ({ notebook, path, markdown }) =>

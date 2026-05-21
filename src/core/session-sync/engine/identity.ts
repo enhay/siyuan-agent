@@ -68,6 +68,32 @@ export function inferTitle(session: NormalizedSession): string {
 	return `${projectSlug(session.cwd)} ${session.source} session ${shortSessionId(session.sessionId)}`;
 }
 
+/** Custom IAL attributes mirrored onto each generated doc. State-loss recovery
+ *  queries `custom-ai-session-key`. Optional keys are omitted (not set to "")
+ *  so SiYuan does not store empty attrs. */
+export function buildSiyuanAttrs(
+	session: NormalizedSession,
+	meta: { hash: string; title: string; titleSource: "ai" | "heuristic" },
+): Record<string, string> {
+	const failed = session.toolActivities.filter((t) => t.status === "failure").length;
+	const attrs: Record<string, string> = {
+		"custom-ai-source": session.source,
+		"custom-ai-session-id": session.sessionId,
+		"custom-ai-session-key": sessionKey(session),
+		"custom-ai-project": projectSlug(session.cwd),
+		"custom-ai-status": "completed",
+		"custom-ai-title": meta.title,
+		"custom-ai-title-source": meta.titleSource,
+		"custom-ai-message-count": String(session.messages.length),
+		"custom-ai-tool-count": String(session.toolActivities.length),
+		"custom-ai-failed-tool-count": String(failed),
+		"custom-ai-content-hash": meta.hash,
+	};
+	if (session.parentSessionId) attrs["custom-ai-parent-session-id"] = session.parentSessionId;
+	if (session.agentId) attrs["custom-ai-agent-id"] = session.agentId;
+	return attrs;
+}
+
 /** `sha256:<hex>` over the rendered content. Async (Web Crypto). */
 export async function contentHash(content: string): Promise<string> {
 	const bytes = new TextEncoder().encode(content);
