@@ -471,7 +471,7 @@
 	appearance: none;
 	-webkit-appearance: none;
 	background: color-mix(in srgb, var(--agent-text, var(--b3-theme-on-surface)) 22%, transparent);
-	color: #fff;
+	color: var(--b3-theme-on-background);
 	line-height: 0;
 	text-align: center;
 	text-indent: 0;
@@ -507,5 +507,21 @@
 	.chat-panel__actions {
 		width: auto;
 		justify-content: flex-end;
+	}
+}
+
+/* Coarse-pointer (mobile dock): enlarge composer hit targets toward 44px. */
+@media (pointer: coarse) {
+	.chat-panel__plus-btn,
+	.chat-panel__send {
+		width: 40px;
+		height: 40px;
+	}
+
+	.chat-panel__model-picker-btn,
+	.chat-panel__sched-btn,
+	.chat-panel__automation-cancel,
+	.chat-panel__automation-create {
+		min-height: 40px;
 	}
 }

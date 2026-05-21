@@ -1,4 +1,4 @@
-import { Plugin, showMessage } from "siyuan";
+import { Plugin, showMessage, confirm } from "siyuan";
 import type { AgentTool } from "../core/agent-types";
 import {
 	AgentConfig,
@@ -188,6 +188,9 @@ export class ChatPanel implements ChatPanelHost {
 			<span class="chat-panel__session-action chat-panel__clear block__icon block__icon--show b3-tooltips b3-tooltips__sw" aria-label="${escapeHtml(this.t("chat.clear"))}">
 				<svg style="width:16px;height:16px"><use xlink:href="#iconTrashcan"></use></svg>
 			</span>
+			<span class="chat-panel__session-action chat-panel__automations-entry block__icon block__icon--show b3-tooltips b3-tooltips__sw" aria-label="${escapeHtml(this.t("chat.view.tasks"))}">
+				<svg style="width:16px;height:16px"><use xlink:href="#iconClock"></use></svg>
+			</span>
 			<span class="chat-panel__session-action chat-panel__settings-entry block__icon block__icon--show b3-tooltips b3-tooltips__sw" aria-label="${escapeHtml(this.t("chat.view.settings"))}">
 				<svg style="width:16px;height:16px"><use xlink:href="#iconSettings"></use></svg>
 			</span>
@@ -227,7 +230,7 @@ export class ChatPanel implements ChatPanelHost {
 					<div class="chat-panel__plus-menu fn__none">
 						<button class="chat-panel__plus-menu-item" type="button" data-action="open-automations">
 							<svg class="chat-panel__plus-menu-icon" aria-hidden="true"><use xlink:href="#iconClock"></use></svg>
-							<span>${escapeHtml(this.t("chat.view.tasks"))}</span>
+							<span>${escapeHtml(this.t("tasks.create"))}</span>
 						</button>
 					</div>
 				</div>
@@ -308,6 +311,9 @@ export class ChatPanel implements ChatPanelHost {
 		/* Settings gear (session bar) + back button (non-chat view header) */
 		this.container.querySelector(".chat-panel__settings-entry")?.addEventListener("click", () => {
 			this.setCurrentView("settings");
+		});
+		this.container.querySelector(".chat-panel__automations-entry")?.addEventListener("click", () => {
+			this.setCurrentView("tasks");
 		});
 		this.container.querySelector(".chat-panel__view-back")?.addEventListener("click", () => {
 			this.setCurrentView("chat");
@@ -807,6 +813,14 @@ export class ChatPanel implements ChatPanelHost {
 	}
 
 	private async deleteSession(id: string): Promise<void> {
+		const entry = this.store.getSessionSummary(id);
+		const title = entry?.title || this.t("chat.newChat");
+		confirm(this.t("chat.delete"), this.t("chat.confirm.deleteSession", { title }), () => {
+			void this.performDeleteSession(id);
+		});
+	}
+
+	private async performDeleteSession(id: string): Promise<void> {
 		await this.store.deleteSession(id);
 		const activeId = this.store.getIndex().activeId;
 		this.activeSession = await this.store.loadSession(activeId);
@@ -843,8 +857,27 @@ export class ChatPanel implements ChatPanelHost {
 	private renderWelcomeScreen(): void {
 		const el = document.createElement("div");
 		el.className = "chat-panel__welcome";
+		const chips: Array<{ label: string; prompt: string }> = [
+			{ label: this.t("chat.welcome.recentLabel"), prompt: this.t("chat.welcome.recentPrompt") },
+			{ label: this.t("chat.welcome.structureLabel"), prompt: this.t("chat.welcome.structurePrompt") },
+			{ label: this.t("chat.welcome.searchLabel"), prompt: this.t("chat.welcome.searchPrompt") },
+			{ label: this.t("chat.welcome.todoLabel"), prompt: this.t("chat.welcome.todoPrompt") },
+		];
 		el.innerHTML = `
-			<h3 class="chat-panel__welcome-title">${escapeHtml(this.t("chat.welcome.title"))}</h3>`;
+			<h3 class="chat-panel__welcome-title">${escapeHtml(this.t("chat.welcome.title"))}</h3>
+			<p class="chat-panel__welcome-desc">${escapeHtml(this.t("chat.welcome.desc"))}</p>
+			<div class="chat-panel__welcome-actions">
+				${chips.map((c) => `<button class="chat-panel__welcome-btn" type="button" data-prompt="${escapeHtml(c.prompt)}">${escapeHtml(c.label)}</button>`).join("")}
+			</div>`;
+		el.querySelectorAll<HTMLButtonElement>(".chat-panel__welcome-btn").forEach((btn) => {
+			btn.addEventListener("click", () => {
+				this.textareaEl.value = btn.dataset.prompt || "";
+				this.resizeComposer();
+				this.textareaEl.focus();
+				const len = this.textareaEl.value.length;
+				this.textareaEl.setSelectionRange(len, len);
+			});
+		});
 		this.messagesEl.appendChild(el);
 	}
 

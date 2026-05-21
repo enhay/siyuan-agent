@@ -20,6 +20,7 @@
   "chat.composerMenu": "更多操作",
   "chat.clear": "清空",
   "chat.delete": "删除",
+  "chat.confirm.deleteSession": "删除对话「{title}」？此操作无法撤销。",
   "chat.placeholder": "问我任何关于笔记的问题… (Enter 发送, Shift+Enter 换行)",
   "chat.placeholder.ask": "问我任何关于笔记的问题 · Enter 发送，Shift+Enter 换行",
   "chat.placeholder.init": "输入 /init，让 SiYuan Agent 更了解你",

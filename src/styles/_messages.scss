@@ -33,7 +33,7 @@
 .chat-msg--assistant .chat-msg__content {
 	color: var(--agent-text, var(--b3-theme-on-surface));
 	padding: 0;
-	max-width: 100%;
+	max-width: min(72ch, 100%);
 	word-break: break-word;
 }
 

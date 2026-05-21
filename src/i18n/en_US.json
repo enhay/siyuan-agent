@@ -20,6 +20,7 @@
   "chat.composerMenu": "More actions",
   "chat.clear": "Clear",
   "chat.delete": "Delete",
+  "chat.confirm.deleteSession": "Delete chat \"{title}\"? This cannot be undone.",
   "chat.placeholder": "Ask anything about your notes... (Enter to send, Shift+Enter for newline)",
   "chat.placeholder.ask": "Ask anything about your notes · Enter to send, Shift+Enter for newline",
   "chat.placeholder.init": "Type /init so SiYuan Agent can learn more about you",
