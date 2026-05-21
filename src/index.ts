@@ -19,7 +19,7 @@ import { ScheduledTaskManager } from "./core/scheduled-task-manager";
 import { SessionSyncManager } from "./core/session-sync/manager";
 import { buildSyncRunner } from "./core/session-sync/runner";
 import { normalizeSessionSyncConfig, type SessionSyncConfig } from "./core/session-sync/config";
-import { detectEnvironment } from "./core/session-sync/env-probe";
+import { detectEnvironment, decideTier } from "./core/session-sync/env-probe";
 import { createTitleProvider } from "./core/session-sync/adapters/title-provider";
 import { createFsSource } from "./core/session-sync/adapters/fs-source";
 import type { SyncRunner } from "./core/session-sync/manager";
@@ -259,15 +259,27 @@ export default class SiYuanAgent extends Plugin {
 		return buildSyncRunner(ss, this, titleProvider);
 	}
 
+	/** One-line snapshot of why session sync may not be running. Logged + shown. */
+	private sessionSyncDiagnostic(): string {
+		const env = detectEnvironment();
+		const ss = this.getSessionSyncConfig();
+		const diag = `os=${env.os} container=${env.container} node=${env.hasNode} tier=${decideTier(env)} enabled=${ss.enabled} notebook=${ss.notebookId ? "set" : "none"} codexPaths=${ss.sourcePaths.codex.length} claudePaths=${ss.sourcePaths.claude.length}`;
+		console.log("[session-sync] diagnostic:", diag, { sourcePaths: ss.sourcePaths });
+		return diag;
+	}
+
 	async runSessionSyncNow(): Promise<void> {
 		showMessage(this.translator.t("sessionSync.syncing"));
 		const result = await this.sessionSyncManager.syncNow();
 		if (!result) {
-			showMessage(this.translator.t("sessionSync.unavailable"), 6000, "error");
+			const diag = this.sessionSyncDiagnostic();
+			console.error("[session-sync] syncNow unavailable:", diag);
+			showMessage(`${this.translator.t("sessionSync.unavailable")} [${diag}]`, 12000, "error");
 			return;
 		}
 		if (result.errors.length > 0) {
-			showMessage(this.translator.t("sessionSync.failed", { error: result.errors[0] }), 8000, "error");
+			console.error("[session-sync] sync errors:", result.errors);
+			showMessage(this.translator.t("sessionSync.failed", { error: result.errors[0] }), 10000, "error");
 			return;
 		}
 		showMessage(
@@ -275,8 +287,9 @@ export default class SiYuanAgent extends Plugin {
 		);
 	}
 
-	/** Probe whether the configured source paths are readable; report counts via toast. */
+	/** Probe whether the configured source paths are readable; report full diagnostic. */
 	async testSessionSyncPaths(): Promise<void> {
+		const diag = this.sessionSyncDiagnostic();
 		const ss = this.getSessionSyncConfig();
 		try {
 			const files = await createFsSource({
@@ -287,9 +300,12 @@ export default class SiYuanAgent extends Plugin {
 			}).list();
 			const codex = files.filter((f) => f.source === "codex").length;
 			const claude = files.filter((f) => f.source === "claude").length;
-			showMessage(this.translator.t("sessionSync.testResult", { codex, claude }));
-		} catch {
-			showMessage(this.translator.t("sessionSync.unavailable"), 6000, "error");
+			console.log(`[session-sync] read ok: codex=${codex} claude=${claude}`);
+			showMessage(`${this.translator.t("sessionSync.testResult", { codex, claude })} [${diag}]`, 10000);
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			console.error("[session-sync] read failed:", e);
+			showMessage(`读取失败 / read failed: ${msg} [${diag}]`, 12000, "error");
 		}
 	}
 

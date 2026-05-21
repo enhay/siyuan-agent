@@ -36,8 +36,12 @@ function normContainer(c?: string): Container {
 
 /** Read SiYuan's frontend system config; tolerant of being run outside SiYuan. */
 export function readSystemConfig(): SystemConfig {
-	const sys = (globalThis as { siyuan?: { config?: { system?: SystemConfig } } }).siyuan?.config?.system;
-	return sys ?? {};
+	const fromGlobal = (globalThis as { siyuan?: { config?: { system?: SystemConfig } } }).siyuan?.config?.system;
+	const fromWindow =
+		typeof window !== "undefined"
+			? (window as unknown as { siyuan?: { config?: { system?: SystemConfig } } }).siyuan?.config?.system
+			: undefined;
+	return fromGlobal ?? fromWindow ?? {};
 }
 
 /** Whether the runtime's native `require` is reachable (desktop Electron only).
