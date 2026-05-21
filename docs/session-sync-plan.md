@@ -231,6 +231,8 @@ ailogger 已在 Obsidian 路径实现 codex 父子分组（`findParent` / 文件
   - **单 writer 互斥**：kernel 无 CAS → 不做脆弱的分布式锁。改为**结构性单写者**：env-probe 的 tier 使一台机器要么插件内、要么 sidecar（互斥），插件内再由 manager 重入守卫防自重叠；同机同时手动跑 sidecar + 启用插件内为**不支持**配置（UI tierNote 已引导）。完整 kernel-lease 显式延后。
   - **sidecar 一等公民**：ailogger 即 sidecar；插件"生成命令"的 tier-2 UI（plan §17.2 态②）延后，架构已支持直接运行 ailogger。
   - 大会话拆分：延后。
+- **整体 review 修正（merge gate）**：B1 已修——设置面板补了"用 AI 生成标题"开关 + 模型下拉（否则 Phase 6 标题路径不可达）；B3 已修——`lastSyncAt` 移入引擎自有 sync state（不再写 `agent-config`，消除与设置保存的丢更新竞争）；新增跨轮聚合回归测试（父先建、子后到→子被归位）。
+  - **B2 延后（显式 de-scope）**：plan §17.4 的富状态面板（状态点/逐源可达指示/计数汇总/错误展开）与**面板内"立即同步"按钮**未实现——需真机浏览器迭代。当前触发走**命令面板**"立即同步 AI 会话"（已可用）；面板仅显示上次同步时间。`SessionSyncManager.onStatusChange` 已预留，待面板落地时接线。
 
 MVP 明确不做：块级 diff、append-only、Obsidian 兼容、用户编辑保留、大会话拆分。
 

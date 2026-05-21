@@ -345,5 +345,8 @@
   "settings.sessionSync.backfillDays": "Backfill days",
   "settings.sessionSync.backfillLimit": "Backfill limit",
   "settings.sessionSync.lastSync": "Last sync: {time}",
-  "settings.sessionSync.never": "Not synced yet"
+  "settings.sessionSync.never": "Not synced yet",
+  "settings.sessionSync.aiTitle": "Generate titles with AI",
+  "settings.sessionSync.aiTitleModel": "AI title model",
+  "settings.sessionSync.aiTitleModelDefault": "— default model —"
 }

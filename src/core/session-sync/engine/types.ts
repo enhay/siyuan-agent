@@ -81,6 +81,9 @@ export interface SessionRecord {
 export interface SyncState {
 	files: Record<string, FileCursor>;
 	sessions: Record<string, SessionRecord>;
+	/** Last successful reconcile time (engine-owned; kept out of user config to
+	 *  avoid lost-update races with the settings save path). */
+	lastSyncAt?: number;
 }
 
 export interface ReconcileResult {

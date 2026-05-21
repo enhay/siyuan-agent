@@ -345,5 +345,8 @@
   "settings.sessionSync.backfillDays": "回填天数",
   "settings.sessionSync.backfillLimit": "回填上限",
   "settings.sessionSync.lastSync": "上次同步：{time}",
-  "settings.sessionSync.never": "尚未同步"
+  "settings.sessionSync.never": "尚未同步",
+  "settings.sessionSync.aiTitle": "用 AI 生成标题",
+  "settings.sessionSync.aiTitleModel": "AI 标题模型",
+  "settings.sessionSync.aiTitleModelDefault": "— 默认模型 —"
 }

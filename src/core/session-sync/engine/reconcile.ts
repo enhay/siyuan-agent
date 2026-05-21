@@ -224,6 +224,7 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 		}
 	}
 
+	state.lastSyncAt = deps.now ? deps.now() : Date.now();
 	await deps.state.save(state);
 	return result;
 }

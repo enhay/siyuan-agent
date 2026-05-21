@@ -133,6 +133,26 @@ describe("reconcile aggregation (codex parent + children)", () => {
 		expect(writer.moves.some((m) => m.childIds[0] === bId && m.parentDocId === writer.byKey.get("codex:A"))).toBe(true);
 	});
 
+	it("nests a late-arriving child under a parent synced on an earlier run", async () => {
+		const writer = new FakeWriter();
+		const state = memState();
+		// Run 1: only the parent exists.
+		await reconcileOnce({ files: fileSource([f("codex", "/a/main.jsonl", 100, codex("main"))]), writer, state, notebookId: "nb", rootPath: "/AI" });
+		expect(writer.moves).toHaveLength(0);
+		// Run 2: a child appears; the parent file is unchanged (fast-path skipped),
+		// yet the full-state move pass nests the child under the existing parent.
+		await reconcileOnce({
+			files: fileSource([
+				f("codex", "/a/main.jsonl", 100, codex("main")),
+				f("codex", "/a/w1.jsonl", 110, codex("w1", { role: "worker", parent: "main" })),
+			]),
+			writer, state, notebookId: "nb", rootPath: "/AI",
+		});
+		expect(writer.moves).toHaveLength(1);
+		expect(writer.moves[0].parentDocId).toBe(writer.byKey.get("codex:main"));
+		expect(writer.moves[0].childIds[0]).toBe(writer.byKey.get("codex:w1"));
+	});
+
 	it("does not re-move children on an unchanged second run (idempotent)", async () => {
 		const writer = new FakeWriter();
 		const state = memState();

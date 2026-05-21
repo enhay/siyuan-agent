@@ -21,6 +21,7 @@ import { escapeHtml } from "./chat-helpers";
 import { defaultTranslator, type Translator } from "../i18n";
 import { normalizeSessionSyncConfig } from "../core/session-sync/config";
 import { decideTier, detectEnvironment } from "../core/session-sync/env-probe";
+import { createPluginStateStore } from "../core/session-sync/adapters/state-store";
 
 const CONFIG_STORAGE = "agent-config";
 
@@ -99,6 +100,14 @@ export class SettingsView {
 			sessionSync: normalizeSessionSyncConfig(detectEnvironment(), config.sessionSync),
 		};
 		this.draft = draft;
+
+		// lastSyncAt lives in the engine-owned sync state, not agent-config.
+		let ssLastSyncAt: number | undefined;
+		try {
+			ssLastSyncAt = (await createPluginStateStore(this.ctx.plugin).load()).lastSyncAt;
+		} catch {
+			/* state not yet written */
+		}
 
 		const configuredModels = flattenModelServices(draft.modelServices);
 		const modelOptions = configuredModels.map((item) => `
@@ -285,7 +294,18 @@ export class SettingsView {
 						<span>${escapeHtml(this.t("settings.sessionSync.backfillLimit"))}</span>
 						<input class="b3-text-field" type="number" min="1" name="ss_backfillLimit" value="${draft.sessionSync.backfillLimit}" />
 					</label>
-					<div style="opacity:.7;font-size:12px;margin-top:8px">${draft.sessionSync.lastSyncAt ? escapeHtml(this.t("settings.sessionSync.lastSync", { time: new Date(draft.sessionSync.lastSyncAt).toLocaleString() })) : escapeHtml(this.t("settings.sessionSync.never"))}</div>
+					<label class="settings-panel__checkbox">
+						<input type="checkbox" name="ss_aiTitle"${draft.sessionSync.aiTitle.enabled ? " checked" : ""} />
+						<span>${escapeHtml(this.t("settings.sessionSync.aiTitle"))}</span>
+					</label>
+					<label class="settings-panel__field">
+						<span>${escapeHtml(this.t("settings.sessionSync.aiTitleModel"))}</span>
+						<select class="b3-select" name="ss_aiTitleModelId">
+							<option value="">${escapeHtml(this.t("settings.sessionSync.aiTitleModelDefault"))}</option>
+							${configuredModels.map((m) => `<option value="${escapeHtml(m.id)}"${m.id === draft.sessionSync.aiTitle.modelId ? " selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}
+						</select>
+					</label>
+					<div style="opacity:.7;font-size:12px;margin-top:8px">${ssLastSyncAt ? escapeHtml(this.t("settings.sessionSync.lastSync", { time: new Date(ssLastSyncAt).toLocaleString() })) : escapeHtml(this.t("settings.sessionSync.never"))}</div>
 				</section>
 			</div>
 		</div>
@@ -377,8 +397,10 @@ export class SettingsView {
 				pollIntervalSec: Number(formData.get("ss_pollIntervalSec")) || 60,
 				backfillDays: Number(formData.get("ss_backfillDays")) || 7,
 				backfillLimit: Number(formData.get("ss_backfillLimit")) || 50,
-				aiTitle: draft.sessionSync.aiTitle,
-				lastSyncAt: draft.sessionSync.lastSyncAt,
+				aiTitle: {
+					enabled: formData.get("ss_aiTitle") === "on",
+					modelId: String(formData.get("ss_aiTitleModelId") || "").trim() || undefined,
+				},
 			},
 		};
 		this.ctx.plugin.data[CONFIG_STORAGE] = nextConfig;

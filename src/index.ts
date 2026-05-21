@@ -70,12 +70,8 @@ export default class SiYuanAgent extends Plugin {
 		this.sessionSyncManager = new SessionSyncManager({
 			getConfig: () => this.getSessionSyncConfig(),
 			getRunner: () => this.buildSessionSyncRunner(),
-			onSynced: async () => {
-				const cfg = this.getConfig();
-				const nextSync = { ...(cfg.sessionSync ?? {}), lastSyncAt: Date.now() };
-				this.data[CONFIG_STORAGE] = { ...cfg, sessionSync: nextSync };
-				await this.saveData(CONFIG_STORAGE, this.data[CONFIG_STORAGE]);
-			},
+			// lastSyncAt is persisted in the engine-owned sync state (not agent-config)
+			// to avoid a lost-update race with the settings save path.
 		});
 
 		this.addIcons(`<symbol id="iconAgent" viewBox="0 0 24 24">
