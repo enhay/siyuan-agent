@@ -41,6 +41,8 @@ export interface SiyuanWriter {
 	setAttrs(input: { docId: string; attrs: Record<string, string> }): Promise<void>;
 	renameDoc(input: { docId: string; title: string }): Promise<void>;
 	moveUnder(input: { childIds: string[]; parentDocId: string }): Promise<void>;
+	/** Collapse (fold) top-level headings whose text starts with one of the prefixes. */
+	foldHeadings(input: { docId: string; headingPrefixes: string[] }): Promise<void>;
 	/** Look up a doc id by `custom-ai-session-key` for state-loss recovery. */
 	findDocBySessionKey(sessionKey: string): Promise<string | undefined>;
 	/** Whether a doc id still exists (user may have deleted it). */

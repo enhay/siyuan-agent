@@ -12,7 +12,7 @@ import type { DiscoveredFile, FileSource, SiyuanWriter, StateStore, TitleProvide
 import type { NormalizedSession, ReconcileResult, SessionRecord, SyncState } from "./types";
 import { parseCodexSession } from "./parse/codex";
 import { parseClaudeSession } from "./parse/claude";
-import { renderSession } from "./render";
+import { renderSession, FOLDABLE_HEADING_PREFIXES } from "./render";
 import { buildSiyuanAttrs, buildSiyuanDocPath, contentHash, fileKey, inferTitle, sessionKey } from "./identity";
 import { inferStatus } from "./status";
 import { collectChildLinks, pendingChildMoves, type ChildLink } from "./aggregate";
@@ -137,6 +137,8 @@ async function upsert(
 	// path leaf until renamed); otherwise only when it actually changed (anti-churn).
 	if (isNew || title !== existing?.title) await deps.writer.renameDoc({ docId, title });
 	await deps.writer.setAttrs({ docId, attrs: buildSiyuanAttrs(session, { hash, title, titleSource, status }) });
+	// Collapse tool/warning sections by default (heading fold attr).
+	await deps.writer.foldHeadings({ docId, headingPrefixes: FOLDABLE_HEADING_PREFIXES });
 
 	const record = toRecord(session, docId, buildSiyuanDocPath(deps.rootPath, session), hash, title, titleSource, file.sizeBytes, now);
 	record.movedUnderParent = existing?.movedUnderParent; // preserve aggregation flag

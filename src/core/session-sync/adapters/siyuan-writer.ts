@@ -53,6 +53,16 @@ export function createSiyuanWriter(k: SiyuanKernel = defaultKernel): SiyuanWrite
 			if (childIds.length > 0) await k.filetree.moveDocsByID(childIds, parentDocId);
 		},
 
+		async foldHeadings({ docId, headingPrefixes }) {
+			const children = (await k.blocks.getChildren(docId)) ?? [];
+			for (const block of children) {
+				if (block?.type !== "h" || typeof block.content !== "string") continue;
+				if (headingPrefixes.some((p) => block.content.startsWith(p))) {
+					await k.attr.setBlockAttrs(block.id, { fold: "1" });
+				}
+			}
+		},
+
 		async findDocBySessionKey(sessionKey) {
 			const rows = await k.sql<IdRow>(
 				`SELECT id FROM blocks WHERE type='d' AND ial LIKE '%custom-ai-session-key="${escapeIalLike(sessionKey)}"%' ESCAPE '\\' LIMIT 1`,

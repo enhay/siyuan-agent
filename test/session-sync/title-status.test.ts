@@ -38,6 +38,7 @@ class FakeWriter implements SiyuanWriter {
 	async setAttrs({ docId, attrs }: { docId: string; attrs: Record<string, string> }) { const k = attrs["custom-ai-session-key"]; if (k) this.byKey.set(k, docId); }
 	async renameDoc({ docId, title }: { docId: string; title: string }) { const d = this.docs.get(docId); if (d) d.title = title; }
 	async moveUnder() {}
+	async foldHeadings() {}
 	async findDocBySessionKey(k: string) { const id = this.byKey.get(k); return id && this.docs.get(id)?.exists ? id : undefined; }
 	async docExists(id: string) { return !!this.docs.get(id)?.exists; }
 }

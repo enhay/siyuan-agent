@@ -39,6 +39,7 @@ class FakeWriter implements SiyuanWriter {
 	async moveUnder(input: { childIds: string[]; parentDocId: string }) {
 		this.moves.push(input);
 	}
+	async foldHeadings() {}
 	async findDocBySessionKey(k: string) {
 		const id = this.byKey.get(k);
 		return id && this.docs.get(id)?.exists ? id : undefined;
@@ -110,7 +111,7 @@ describe("reconcile aggregation (codex parent + children)", () => {
 
 		// Parent body lists the children as block refs.
 		const parentMd = writer.docs.get(parentId)!.markdown;
-		expect(parentMd).toContain("## 子代理");
+		expect(parentMd).toContain("## 🧩 子代理");
 		expect(parentMd).toContain(`((${c1}`);
 		expect(parentMd).toContain(`((${c2}`);
 	});
