@@ -48,14 +48,34 @@ export function assetRelPath(session: Pick<NormalizedSession, "source" | "sessio
 	return `session-sync/${session.source}-${slugify(session.sessionId) || "session"}.md`;
 }
 
-/** Stable HPath that does NOT depend on a dynamic/AI title (the readable title
- *  is set separately via renameDoc — see plan §11). */
+/** Depth-2 grouping folder: the session's project (cwd basename), or 未归类
+ *  when cwd yields none. Folders exist for human browsing only — time/source
+ *  filtering is served by the IAL attrs + search, so we group by the one axis
+ *  users actually recall ("which project"). */
+export function projectFolder(cwd: string | undefined): string {
+	const slug = projectSlug(cwd);
+	return slug === "unknown" ? "未归类" : slug;
+}
+
+const SOURCE_EMOJI: Record<SessionSource, string> = { codex: "🔵", claude: "🟣" };
+
+/** Readable doc name shown in the tree: `<emoji><MM-DD> <title>`. The source
+ *  emoji + date prefix give at-a-glance source and chronological sort within the
+ *  project folder; the clean title is preserved separately in custom-ai-title. */
+export function buildDocName(session: NormalizedSession, title: string): string {
+	const emoji = SOURCE_EMOJI[session.source] ?? "";
+	const mmdd = (session.createdAt || "").slice(5, 10); // YYYY-MM-DD → MM-DD
+	const prefix = mmdd ? `${emoji}${mmdd} ` : emoji ? `${emoji} ` : "";
+	return `${prefix}${title}`;
+}
+
+/** Stable HPath `<root>/<project>/<leaf>` (depth 2). Does NOT depend on the
+ *  dynamic/AI title — the readable name is set separately via renameDoc
+ *  (buildDocName), so the leaf only needs to be stable + unique. */
 export function buildSiyuanDocPath(rootPath: string, session: NormalizedSession): string {
-	const date = (session.createdAt || "").slice(0, 10);
-	const [year = "0000", month = "00", day = "00"] = date.split("-");
 	const root = rootPath.startsWith("/") ? rootPath : `/${rootPath}`;
-	const leaf = `${projectSlug(session.cwd)}--${session.source}--${shortSessionId(session.sessionId)}`;
-	return `${root.replace(/\/+$/, "")}/${year}/${month}/${day}/${leaf}`;
+	const leaf = `${session.source}-${shortSessionId(session.sessionId)}`;
+	return `${root.replace(/\/+$/, "")}/${projectFolder(session.cwd)}/${leaf}`;
 }
 
 /** Normalize a candidate title: collapse whitespace, strip a leading slash-command

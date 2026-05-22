@@ -57,7 +57,8 @@ describe("reconcile AI title resolution", () => {
 		const s = await state.load();
 		expect(s.sessions["codex:c1"].title).toBe("精炼标题");
 		expect(s.sessions["codex:c1"].titleSource).toBe("ai");
-		expect([...writer.docs.values()][0].title).toBe("精炼标题");
+		// Tree name = emoji + MM-DD prefix + clean title (date varies with fixture).
+		expect([...writer.docs.values()][0].title).toMatch(/^🔵\d\d-\d\d 精炼标题$/);
 	});
 
 	it("falls back to the heuristic when the provider returns nothing", async () => {

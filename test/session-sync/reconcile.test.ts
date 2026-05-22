@@ -162,7 +162,8 @@ describe("reconcileOnce", () => {
 		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 100, mtimeMs: 1000 }, content: codexContent("c1") }]), writer, state));
 		expect(writer.calls.create).toBe(1);
 		expect(writer.calls.rename).toBe(1); // forced because isNew
-		const created = [...writer.docs.values()].find((d) => d.title === "hello");
+		// Renamed to the readable name (emoji + MM-DD + clean title), not the slug leaf.
+		const created = [...writer.docs.values()].find((d) => /^🔵\d\d-\d\d hello$/.test(d.title));
 		expect(created).toBeDefined();
 	});
 });

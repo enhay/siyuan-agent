@@ -13,7 +13,7 @@ import type { NormalizedSession, ReconcileResult, SessionRecord, SyncState } fro
 import { parseCodexSession } from "./parse/codex";
 import { parseClaudeSession } from "./parse/claude";
 import { renderSession, FOLDABLE_HEADING_PREFIXES } from "./render";
-import { assetRelPath, buildSiyuanAttrs, buildSiyuanDocPath, contentHash, fileKey, inferTitle, sessionKey } from "./identity";
+import { assetRelPath, buildDocName, buildSiyuanAttrs, buildSiyuanDocPath, contentHash, fileKey, inferTitle, sessionKey } from "./identity";
 import { inferStatus } from "./status";
 import { collectChildLinks, type ChildLink } from "./aggregate";
 
@@ -133,7 +133,8 @@ async function upsertDoc(
 		isNew = true;
 	}
 
-	if (isNew || title !== existing?.title) await deps.writer.renameDoc({ docId, title });
+	// Tree name carries emoji + MM-DD prefix; custom-ai-title keeps the clean title.
+	if (isNew || title !== existing?.title) await deps.writer.renameDoc({ docId, title: buildDocName(session, title) });
 	await deps.writer.setAttrs({ docId, attrs: buildSiyuanAttrs(session, { hash, title, titleSource, status }) });
 	await deps.writer.foldHeadings({ docId, headingPrefixes: FOLDABLE_HEADING_PREFIXES });
 

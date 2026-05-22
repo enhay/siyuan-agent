@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	buildDocName,
 	buildSiyuanDocPath,
 	contentHash,
 	fileKey,
@@ -46,10 +47,20 @@ describe("identity helpers", () => {
 		expect(shortSessionId("019d84b0-2520-79c2-892a")).toHaveLength(12);
 	});
 
-	it("buildSiyuanDocPath is date+slug, no title", () => {
+	it("buildSiyuanDocPath is <root>/<project>/<leaf> (depth 2), no title", () => {
 		const p = buildSiyuanDocPath("/AI 会话", makeSession({ sessionId: "019d84b0-2520-79c2", cwd: "/x/proj" }));
-		// shortSessionId truncates the slugified id to 12 chars.
-		expect(p).toBe("/AI 会话/2026/05/21/proj--codex--019d84b0-252");
+		// leaf = <source>-<shortSessionId> (slugified id truncated to 12 chars).
+		expect(p).toBe("/AI 会话/proj/codex-019d84b0-252");
+	});
+
+	it("buildSiyuanDocPath groups no-cwd sessions under 未归类", () => {
+		const p = buildSiyuanDocPath("会话", makeSession({ sessionId: "abc", cwd: undefined }));
+		expect(p).toBe("/会话/未归类/codex-abc");
+	});
+
+	it("buildDocName prefixes emoji + MM-DD, keeps title clean", () => {
+		expect(buildDocName(makeSession({ source: "codex" }), "修复登录")).toBe("🔵05-21 修复登录");
+		expect(buildDocName(makeSession({ source: "claude" }), "调研")).toBe("🟣05-21 调研");
 	});
 
 	it("inferTitle truncates long first user message; falls back when none", () => {
