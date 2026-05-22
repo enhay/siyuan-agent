@@ -83,7 +83,7 @@ export function renderSession(session: NormalizedSession, options: RenderOptions
 
 	// Cleaned, non-empty conversation turns (drives both TL;DR and 对话).
 	const turns = session.messages
-		.map((m) => ({ role: m.role, text: cleanMessageText(m.text) }))
+		.map((m) => ({ role: m.role, text: cleanMessageText(m.text), ts: m.timestamp }))
 		.filter((m) => m.text.length > 0);
 
 	// ── 📋 概览 ──
@@ -104,19 +104,8 @@ export function renderSession(session: NormalizedSession, options: RenderOptions
 	if (session.model) lines.push(`| model | ${session.model} |`);
 	lines.push("");
 
-	// ── 🧩 子代理 ──
-	if (subs.length > 0) {
-		lines.push("## 🧩 子代理", "");
-		const labelCounts = new Map<string, number>();
-		for (const sub of subs) {
-			const base = sub.nickname ? `${sub.role ?? "agent"} · ${sub.nickname}` : sub.role ?? "agent";
-			const seen = (labelCounts.get(base) ?? 0) + 1;
-			labelCounts.set(base, seen);
-			const label = seen === 1 ? base : `${base} (${seen})`;
-			lines.push(`- ((${sub.docId} "${refAnchor(sub.title)}")) — ${label}`);
-		}
-		lines.push("");
-	}
+	// Sub-agent entries are inlined into the 对话 timeline at their trigger time
+	// (see below), so there is no standalone 子代理 section.
 
 	// ── 🎯 结论 (TL;DR) ──
 	const firstUser = turns.find((m) => m.role === "user");
@@ -128,23 +117,41 @@ export function renderSession(session: NormalizedSession, options: RenderOptions
 		if (failed.length > 0) lines.push(`> ⚠️ 有 ${failed.length} 个工具调用失败，见下方折叠区。`, "");
 	}
 
-	// ── 💬 对话 ── (group consecutive same-role turns under one label)
+	// ── 💬 对话 ── (chronological; sub-agent entries inlined at their trigger time)
 	lines.push("## 💬 对话", "");
-	if (turns.length === 0) {
+	type Item =
+		| { ts: string; kind: "msg"; role: "user" | "assistant"; text: string }
+		| { ts: string; kind: "sub"; docId: string; label: string };
+	const items: Item[] = turns.map((m) => ({ ts: m.ts ?? "", kind: "msg", role: m.role, text: m.text }));
+	const subLabelCounts = new Map<string, number>();
+	for (const s of subs) {
+		const base = s.nickname ? `${s.role ?? "agent"} · ${s.nickname}` : s.role ?? "agent";
+		const seen = (subLabelCounts.get(base) ?? 0) + 1;
+		subLabelCounts.set(base, seen);
+		const label = `${seen === 1 ? base : `${base} (${seen})`} — ${s.title}`;
+		items.push({ ts: s.createdAt ?? "", kind: "sub", docId: s.docId, label });
+	}
+	// Stable sort by timestamp keeps a sub-agent right after the turn that spawned it.
+	items.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+
+	if (items.length === 0) {
 		lines.push("（无对话内容）", "");
 	} else {
-		for (let i = 0; i < turns.length; i++) {
-			const m = turns[i];
-			const sameAsPrev = i > 0 && turns[i - 1].role === m.role;
-			const sameAsNext = i + 1 < turns.length && turns[i + 1].role === m.role;
-			if (m.role === "user") {
-				if (!sameAsPrev) lines.push("> 🧑 **用户**", ">");
-				lines.push(...m.text.split("\n").map((line) => `> ${line}`));
-				lines.push(sameAsNext ? ">" : ""); // keep blockquote open within a group
-			} else {
-				if (!sameAsPrev) lines.push("🤖 **助手**", "");
-				lines.push(m.text, "");
+		let prevRole: string | null = null;
+		for (const it of items) {
+			if (it.kind === "sub") {
+				lines.push(`> 🧩 **子代理** ((${it.docId} "${refAnchor(it.label)}"))`, "");
+				prevRole = null; // a marker breaks any role grouping
+				continue;
 			}
+			if (it.role === "user") {
+				if (prevRole !== "user") lines.push("> 🧑 **用户**", ">");
+				lines.push(...it.text.split("\n").map((line) => `> ${line}`), "");
+			} else {
+				if (prevRole !== "assistant") lines.push("🤖 **助手**", "");
+				lines.push(it.text, "");
+			}
+			prevRole = it.role;
 		}
 	}
 

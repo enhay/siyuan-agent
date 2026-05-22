@@ -207,12 +207,15 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 		return d;
 	};
 	const ordered = [...entries].sort((a, b) => depthOf(sessionKey(b.session)) - depthOf(sessionKey(a.session)));
+	if (ordered.length > 0) console.log(`[session-sync] processing ${ordered.length} changed sessions…`);
+	let processed = 0;
 	for (const { file, session } of ordered) {
 		try {
 			await upsert(deps, state, session, file, result, collectChildLinks(state, session.source, session.sessionId));
 		} catch (err) {
 			result.errors.push(`failed to upsert ${file.path}: ${err}`);
 		}
+		if (++processed % 25 === 0) console.log(`[session-sync] ${processed}/${ordered.length} (new ${result.newSessions}, err ${result.errors.length})`);
 	}
 
 	// 3. Nest children under their parent docs (idempotent via movedUnderParent).

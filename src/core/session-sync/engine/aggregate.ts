@@ -15,6 +15,9 @@ export interface ChildLink {
 	nickname?: string;
 	toolCount?: number;
 	failedToolCount?: number;
+	/** Child start time (≈ when the parent spawned it) — used to place its link
+	 *  inline in the parent's conversation timeline. */
+	createdAt?: string;
 }
 
 /** Stable parent session key for a child record. */
@@ -36,6 +39,7 @@ export function collectChildLinks(state: SyncState, parentSource: string, parent
 		nickname: r.agentNickname,
 		toolCount: r.toolCount,
 		failedToolCount: r.failedToolCount,
+		createdAt: r.createdAt,
 	}));
 }
 

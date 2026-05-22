@@ -82,23 +82,42 @@ describe("renderSession readability", () => {
 		expect(md.match(/🧑 \*\*用户\*\*/g)?.length).toBe(1);
 	});
 
-	it("sub-agent rollup + de-duped labels + quote-escaped refs", () => {
+	it("inlines sub-agent entries (no standalone section) with rollup + escaped refs", () => {
 		const md = renderSession(session(), {
 			subAgents: [
-				{ docId: "d1", title: 'fix the "login" bug', role: "worker", nickname: "Ada", toolCount: 5, failedToolCount: 1 },
-				{ docId: "d2", title: "b", role: "worker", nickname: "Ada", toolCount: 3, failedToolCount: 0 },
+				{ docId: "d1", title: 'fix the "login" bug', role: "worker", nickname: "Ada", toolCount: 5, failedToolCount: 1, createdAt: "2026-05-01T10:30:00Z" },
+				{ docId: "d2", title: "b", role: "worker", nickname: "Ada", toolCount: 3, failedToolCount: 0, createdAt: "2026-05-01T10:31:00Z" },
 			],
 		});
-		expect(md).toContain("## 🧩 子代理");
-		expect(md).toContain("((d1 \"fix the 'login' bug\"))");
-		expect(md).toContain("worker · Ada");
-		expect(md).toContain("worker · Ada (2)");
-		expect(md).toContain("| 子代理 | 2（工具 8，失败 1） |");
+		expect(md).not.toContain("## 🧩 子代理"); // no standalone section
+		expect(md).toContain("> 🧩 **子代理** ((d1 \"worker · Ada — fix the 'login' bug\"))");
+		expect(md).toContain("worker · Ada (2)"); // de-duped label
+		expect(md).toContain("| 子代理 | 2（工具 8，失败 1） |"); // overview rollup kept
 	});
 
-	it("omits sub-agent section when there are none", () => {
+	it("places a sub-agent entry between the turns it was triggered between (by createdAt)", () => {
+		const md = renderSession(
+			session({
+				messages: [
+					{ role: "user", text: "do A", timestamp: "2026-05-01T10:00:00Z" },
+					{ role: "assistant", text: "spawning a worker", timestamp: "2026-05-01T10:00:10Z" },
+					{ role: "assistant", text: "worker finished", timestamp: "2026-05-01T10:05:00Z" },
+				],
+			}),
+			{ subAgents: [{ docId: "w1", title: "the worker", role: "worker", createdAt: "2026-05-01T10:00:30Z" }] },
+		);
+		const convo = md.slice(md.indexOf("## 💬 对话"));
+		const iSpawn = convo.indexOf("spawning a worker");
+		const iSub = convo.indexOf("🧩 **子代理**");
+		const iDone = convo.indexOf("worker finished");
+		expect(iSpawn).toBeGreaterThan(-1);
+		expect(iSub).toBeGreaterThan(iSpawn); // after the spawning turn
+		expect(iDone).toBeGreaterThan(iSub); // before the finished turn
+	});
+
+	it("omits sub-agent markers when there are none", () => {
 		const md = renderSession(session());
-		expect(md).not.toContain("🧩 子代理");
+		expect(md).not.toContain("🧩");
 	});
 });
 

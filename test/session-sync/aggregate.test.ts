@@ -109,9 +109,9 @@ describe("reconcile aggregation (codex parent + children)", () => {
 		expect(writer.moves.every((m) => m.parentDocId === parentId)).toBe(true);
 		expect(writer.moves.map((m) => m.childIds[0]).sort()).toEqual([c1, c2].sort());
 
-		// Parent body lists the children as block refs.
+		// Parent body links the children inline as sub-agent entries.
 		const parentMd = writer.docs.get(parentId)!.markdown;
-		expect(parentMd).toContain("## 🧩 子代理");
+		expect(parentMd).toContain("🧩 **子代理**");
 		expect(parentMd).toContain(`((${c1}`);
 		expect(parentMd).toContain(`((${c2}`);
 	});
