@@ -3,15 +3,15 @@
  * agent framework's tool runtime.
  *
  * A tool handler is a pure `(args, ctx) => Promise<string>` that never names a
- * framework type. `defineTool` wraps it with LangChain's `tool()` and maps the
- * `ToolRuntime` into a framework-agnostic `ToolEmitContext`. A framework swap
- * rewrites this one file, not the ~20 tools.
+ * framework type. `defineTool` wraps it with the AI SDK's `tool()` and maps the
+ * call's `experimental_context` + `toolCallId` into a framework-agnostic
+ * `ToolEmitContext`. A framework swap rewrites this one file, not the ~20 tools.
  *
- * The call shape mirrors `tool(handler, config)` so the handler keeps its
- * Zod-inferred `args` type via the same deferred inference LangChain relies on.
+ * The call shape stays `defineTool(handler, config)` so the handler keeps its
+ * Zod-inferred `args` type via the same deferred inference the SDK relies on.
  */
 
-import { tool, type ToolRuntime } from "@langchain/core/tools";
+import { tool } from "ai";
 import type { z } from "zod";
 import type { AgentTool } from "../agent-types";
 
@@ -34,33 +34,46 @@ export interface DefineToolConfig<TSchema extends z.ZodTypeAny> {
 	schema: TSchema;
 }
 
+/** The emit sink the stream runtime (Wave 2) installs on `experimental_context`. */
+interface ToolEventSink {
+	emit?: (toolCallId: string, payload: Record<string, unknown>) => void;
+}
+
 /**
- * Map a tool runtime to a framework-agnostic ToolEmitContext. The only place
- * the writer wire-format lives — kept exported so it can be tested directly
- * without standing up a LangChain stream.
+ * Map the AI SDK call context to a framework-agnostic ToolEmitContext. The only
+ * place the writer wiring lives — kept exported so it can be tested directly
+ * without standing up a stream.
+ *
+ * The runtime sets `experimental_context = { emit(toolCallId, payload) }`; here
+ * we curry the `toolCallId` so handlers still call `ctx.emit(payload)`.
  */
-export function runtimeToEmitContext(
-	runtime: { writer?: (chunk: unknown) => void; toolCallId?: string },
+export function emitContextFrom(
+	experimentalContext: ToolEventSink | undefined,
+	toolCallId: string,
 ): ToolEmitContext {
+	const sink = experimentalContext?.emit;
 	return {
-		canEmit: !!runtime.writer,
-		emit: (payload) =>
-			runtime.writer?.(JSON.stringify({ ...payload, toolCallId: runtime.toolCallId })),
+		canEmit: typeof sink === "function",
+		emit: (payload) => sink?.(toolCallId, payload),
 	};
 }
 
-/** Wrap a pure handler as an agent tool, mapping the runtime to ToolEmitContext. */
+/** Wrap a pure handler as an agent tool, mapping the call context to ToolEmitContext. */
 export function defineTool<TSchema extends z.ZodTypeAny>(
 	handler: (args: z.infer<TSchema>, ctx: ToolEmitContext) => Promise<string> | string,
 	config: DefineToolConfig<TSchema>,
 ): AgentTool {
-	return tool(
-		async (args: z.infer<TSchema>, runtime: ToolRuntime) =>
-			handler(args, runtimeToEmitContext(runtime)),
-		{
-			name: config.name,
-			description: config.description,
-			schema: config.schema,
-		},
-	);
+	const t = tool({
+		description: config.description,
+		inputSchema: config.schema,
+		execute: async (args: z.infer<TSchema>, { toolCallId, experimental_context }) =>
+			handler(args, emitContextFrom(experimental_context as ToolEventSink | undefined, toolCallId)),
+	});
+	// AI SDK tools carry no name — the name is the key in the ToolSet record
+	// passed to streamText/Agent (see `AgentToolSet` in agent-types.ts). Stash it
+	// so Wave 2 can build the record via
+	//   Object.fromEntries(tools.map(t => [t.__toolName, t]))
+	// and so sub-agent.ts can keep filtering tools by name (`__toolName`).
+	(t as AgentTool & { __toolName: string }).__toolName = config.name;
+	return t as AgentTool;
 }

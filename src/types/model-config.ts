@@ -13,6 +13,12 @@ export interface ModelConfig {
 	maxTokens?: number;
 	/** Default temperature */
 	temperature?: number;
+	/**
+	 * For OpenAI-compatible endpoints that stream chain-of-thought inline as
+	 * `<tag>…</tag>` text (e.g. `think`): peel it into reasoning parts via
+	 * extractReasoningMiddleware. Leave unset for native reasoning providers.
+	 */
+	reasoningTag?: string;
 }
 
 export interface ModelServiceModelConfig {
