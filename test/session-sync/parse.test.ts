@@ -101,6 +101,19 @@ describe("parseCodexSession", () => {
 		expect(users).toHaveLength(1);
 		expect(users[0].text).toBe("real question");
 	});
+
+	it("filters codex control-tag injections (turn_aborted, subagent_notification)", () => {
+		const content = jsonl([
+			{ timestamp: "2026-05-01T10:00:00Z", type: "session_meta", payload: { id: "codex-z" } },
+			{ timestamp: "2026-05-01T10:00:01Z", type: "event_msg", payload: { type: "user_message", message: "<turn_aborted> The user interrupted the previous turn." } },
+			{ timestamp: "2026-05-01T10:00:02Z", type: "event_msg", payload: { type: "user_message", message: '<subagent_notification>\n{"agent_path":"x","status":{"completed":"done"}}' } },
+			{ timestamp: "2026-05-01T10:00:03Z", type: "event_msg", payload: { type: "user_message", message: "实际问题" } },
+		]);
+		const s = parseCodexSession(content);
+		const users = s.messages.filter((m) => m.role === "user");
+		expect(users).toHaveLength(1);
+		expect(users[0].text).toBe("实际问题");
+	});
 });
 
 describe("parseClaudeSession", () => {

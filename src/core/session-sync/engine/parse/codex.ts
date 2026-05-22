@@ -54,8 +54,9 @@ function isInjectedContextMessage(role: "user" | "assistant", text: string): boo
 	)
 		return true;
 	// Codex control injections that aren't real user input (interrupt markers,
-	// standalone context blocks) — would otherwise leak into the doc title.
-	return /^<(turn_aborted|environment_context|user_instructions)\b/.test(normalized);
+	// standalone context blocks, sub-agent result callbacks fed back to the parent
+	// as a user-role message) — would otherwise render as user turns / doc titles.
+	return /^<(turn_aborted|environment_context|user_instructions|subagent_notification)\b/.test(normalized);
 }
 
 export function parseCodexSession(content: string, _sourcePath?: string): NormalizedSession {
