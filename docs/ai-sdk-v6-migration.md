@@ -460,3 +460,19 @@ Wave 4  可选收益
 ### 11.3 策略
 
 **一次迁到 v6 稳定线（`ai@6.0.177`，已 pin），v7 转正后当一次普通 minor bump 处理。** 本文档第 5–10 节即这一步的完整设计；v7 不需要单独的迁移设计文档，届时按官方 v6→v7 migration guide 走依赖升级即可。对本文档 §6 的持久化设计有一个顺带好处：统一到 `UIMessage[]` 后，v7/后续把 reasoning、structured output、多模态 part 作为**非破坏性 minor** 加入，无需再来一次大改。
+
+---
+
+## 12. 实测落地与偏差（2026-05-22，已实现）
+
+Waves 0–3 已落地：`src/` 无 LangChain import，生产构建绿，`npm test` 308 passed。安装 `ai@6.0.190`（与 pin 的 `6.0.177` 同 minor）。与 §5/§6 设计的关键偏差如下（实现以本节为准）：
+
+- **Wave 2/3 合并实现**：原计划 Wave 2（引擎）/Wave 3（持久化）分开，实测因消息形状与引擎耦合，合并为一组提交更干净。
+- **持久化分轨保留（未做 §6 的 UIMessage[] 统一）**：`state.messages` 改为 AI SDK **`ModelMessage[]`**（streamText 直接吃、turn 后 append `result.response.messages`）；`messagesUi` **保持 `lc:1` dict 形态**（plain JSON，非 LangChain 实例）。收益：**UI 渲染路径（直播 + 历史回放）零改动，B1 完全规避，旧会话仍能渲染**。代价：`messages`/`messagesUi` 双轨保留——§6 的「删双轨」降级为可选 Wave 4（已 DEFER，属低价值优化）。
+- **`message-shape.ts`**：删 `@langchain/*` 类与 `messageFromDict`/`messagesFromDict`；accessors 同时读 `lc:1` dict 与 `ModelMessage` parts；新增 `toModelMessages()`（入站 lc:1/简化 dict → ModelMessage，新会话直接 passthrough）。移除了对 live `_getType()` 实例的支持（不再产生实例）。
+- **`makeAgent` 不再返回 agent 对象**，返回 `AgentRuntime {model, system, tools(ToolSet), providerOptions}`；`runAgentStream` 内部调 `streamText` 并 `for await fullStream`。`agent-types.ts` 多导出 `AgentToolSet`，工具集经 `toolSetFromArray(__toolName)` 由数组转 record。
+- **工具自定义 UI 事件顺序修复（实现期发现的真 bug）**：`streamText` 会**急切执行** `execute()`，故工具 `emit` 可能早于消费方处理到 `tool-call` part → 事件 `toolCallIndex` 绑成 -1。修复：在 `runAgentStream` 缓冲早到的 emit，待 `tool_call_start` 注册后再 flush 绑定。详见 `stream-runtime.ts` 的 `pendingEmits`。
+- **追踪（§5.9）**：`makeTracer`/LangSmith 已删（`agent.ts`/`chat-panel`/`scheduled-task-manager` 不再传 tracer callbacks）。`AgentConfig` 里的 `langSmith*` 字段与 settings UI 暂留为**死配置**（清理属低价值，未做）。
+- **MCP（§5.8）**：未改用 `@ai-sdk/mcp` 的 `createMCPClient`；`mcp-client.ts` 自带 JSON-RPC HTTP 传输，仅把工具包装从 LangChain `tool` 换成 `ai` 的 `tool()`+`__toolName`（函数名 `mcpToolsToLangChain` 暂留）。
+- **测试**：删 `chat-model`/`stream-parser`/`04-create-agent`（测已删内部）；其余按 `tool.execute()`/`__toolName`/`generateText`(MockLanguageModelV3) 重写；`stream-runtime.test` 改为经真实 `streamText` + mock model 驱动。
+- **Wave 0 PoC** 保留在 `_harness/poc-aisdk.test.ts`（throwaway，未纳入 vitest include）。
