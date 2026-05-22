@@ -68,10 +68,16 @@ function oneLine(text: string, max: number): string {
 	return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
 }
 
-/** A flat, code-free one-line teaser for the muted 结论 callout (code fences
- *  collapsed to a placeholder so a blockquote never wraps a code block). */
+/** A flat, plain-text one-line teaser for the muted 结论 callout: code fences →
+ *  placeholder, table rows / heading & emphasis markers dropped, so a long
+ *  table- or heading-ending message doesn't collapse into pipe/asterisk noise. */
 function teaser(text: string, max: number): string {
-	return oneLine(text.replace(/```[\s\S]*?```/g, " [代码] "), max);
+	const plain = text
+		.replace(/```[\s\S]*?```/g, " [代码] ")
+		.replace(/^\s*\|.*\|\s*$/gm, " ") // markdown table rows
+		.replace(/^\s*#{1,6}\s+/gm, "") // heading markers
+		.replace(/[*_`>#]/g, ""); // residual emphasis / quote / hash markers
+	return oneLine(plain, max);
 }
 
 export interface RenderOptions {
