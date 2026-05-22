@@ -23,6 +23,21 @@ interface IdRow {
 	id?: string;
 }
 
+/** Retry a kernel op that can transiently fail right after createDocWithMd while
+ *  SiYuan's filetree index catches up (e.g. moveDocsByID "tree not found"). */
+async function withRetry<T>(fn: () => Promise<T>, attempts = 3, delayMs = 400): Promise<T> {
+	let lastErr: unknown;
+	for (let i = 0; i < attempts; i++) {
+		try {
+			return await fn();
+		} catch (err) {
+			lastErr = err;
+			if (i < attempts - 1) await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
+		}
+	}
+	throw lastErr;
+}
+
 export function createSiyuanWriter(k: SiyuanKernel = defaultKernel): SiyuanWriter {
 	return {
 		async createDoc({ notebook, path, markdown }) {
@@ -50,11 +65,13 @@ export function createSiyuanWriter(k: SiyuanKernel = defaultKernel): SiyuanWrite
 		},
 
 		async moveUnder({ childIds, parentDocId }) {
-			if (childIds.length > 0) await k.filetree.moveDocsByID(childIds, parentDocId);
+			// moveDocsByID can hit "tree not found" right after createDocWithMd
+			// (async filetree indexing) → retry; still self-heals next sync if it fails.
+			if (childIds.length > 0) await withRetry(() => k.filetree.moveDocsByID(childIds, parentDocId));
 		},
 
 		async foldHeadings({ docId, headingPrefixes }) {
-			const children = (await k.blocks.getChildren(docId)) ?? [];
+			const children = (await withRetry(() => k.blocks.getChildren(docId))) ?? [];
 			for (const block of children) {
 				if (block?.type !== "h" || typeof block.content !== "string") continue;
 				if (headingPrefixes.some((p) => block.content.startsWith(p))) {
