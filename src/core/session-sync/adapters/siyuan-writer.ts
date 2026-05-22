@@ -7,16 +7,18 @@
 import { kernel as defaultKernel, sqlValue, type SiyuanKernel } from "../../tools/siyuan-kernel";
 import type { SiyuanWriter } from "../engine/ports";
 
-/** Escape a value for embedding inside a SQL `LIKE '…' ESCAPE '\'` pattern.
- *  - `\`, `%`, `_` are LIKE metacharacters → backslash-escaped.
- *  - IAL attribute values are HTML-escaped, so a literal `"` is stored as `&quot;`
- *    (load-bearing for values with quotes; harmless otherwise).
- *  - `'` is doubled for the SQL string literal. */
+/** Escape a value for embedding inside a SQL `LIKE '…'` pattern.
+ *
+ *  IMPORTANT: SiYuan's SQL parser PANICS on a `LIKE … ESCAPE …` clause
+ *  (`sql.BinaryExpr.String(): invalid op ESCAPE`), which silently breaks every
+ *  dedup lookup → the sync can no longer find existing docs → it creates
+ *  duplicates. So we must NOT emit an ESCAPE clause, and therefore must not rely
+ *  on backslash-escaping LIKE metacharacters either. That's safe here: session
+ *  keys are `<source>:<uuid/hex>` and carry no `%`/`_`/`\`.
+ *  - `'` is doubled for the SQL string literal.
+ *  - IAL attribute values are HTML-escaped, so a literal `"` is stored as `&quot;`. */
 function escapeIalLike(value: string): string {
-	return value
-		.replace(/[\\%_]/g, "\\$&")
-		.replace(/'/g, "''")
-		.replace(/"/g, "&quot;");
+	return value.replace(/'/g, "''").replace(/"/g, "&quot;");
 }
 
 interface IdRow {
@@ -99,7 +101,7 @@ export function createSiyuanWriter(k: SiyuanKernel = defaultKernel, opts: Siyuan
 
 		async findDocBySessionKey(sessionKey) {
 			const rows = await k.sql<IdRow>(
-				`SELECT id FROM blocks WHERE type='d' AND ial LIKE '%custom-ai-session-key="${escapeIalLike(sessionKey)}"%' ESCAPE '\\' LIMIT 1`,
+				`SELECT id FROM blocks WHERE type='d' AND ial LIKE '%custom-ai-session-key="${escapeIalLike(sessionKey)}"%' LIMIT 1`,
 			);
 			return rows.find((r) => typeof r.id === "string")?.id;
 		},
