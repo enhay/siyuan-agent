@@ -8,10 +8,7 @@ import {
 	SessionIndexEntry,
 	TodoList,
 	ToolUIEvent,
-	ToolMessageUi,
-	UiMessage,
 	buildInitPrompt,
-	isToolMessageUi,
 	normalizeAgentConfig,
 	listConfiguredModels,
 	resolveModelConfig,
@@ -26,7 +23,6 @@ import { renderMarkdown } from "./markdown";
 import { SessionStore } from "../core/session-store";
 import { ScheduledTaskManager } from "../core/scheduled-task-manager";
 import { presetToSchedule, DEFAULT_TIME, type PresetForm, type SchedulePreset } from "../core/schedule-presets";
-import { ensureMessagesUi } from "../core/ui-message-builder";
 import { compactMessages, shouldCompact } from "../core/compaction";
 import { createModel } from "../core/model";
 import { getDefaultTools } from "../core/tools";
@@ -49,7 +45,7 @@ import {
 } from "./tool-event-render";
 import {
 	messageKind, messageContent, messageReasoning, messageToolCalls,
-	messageToolCallId, toolCallId,
+	messageToolCallId, messageToolResult,
 } from "../core/message-shape";
 const CONFIG_STORAGE = "agent-config";
 const INIT_NOTEBOOK_NAME = "SiYuan-Agent";
@@ -299,8 +295,6 @@ export class ChatPanel implements ChatPanelHost {
 			i18n: this.i18n,
 			renderConversationMessages: (messages, toolUIEvents, targetEl) =>
 				this.renderConversationMessages(messages, toolUIEvents, targetEl),
-			renderConversationMessagesUi: (messagesUi, targetEl) =>
-				this.renderConversationMessagesUi(messagesUi, targetEl),
 		});
 
 		this.settingsView = new SettingsView({
@@ -841,17 +835,15 @@ export class ChatPanel implements ChatPanelHost {
 		this.syncReasoningControl();
 		void this.refreshModelSelector();
 
-	/* Lazy-migrate old sessions that lack messagesUi */
 		if (!s.state) s.state = {};
-		ensureMessagesUi(s.state);
 
-	/* Re-render messages from messagesUi */
+	/* Re-render from the single message track + tool cards */
 		this.messagesEl.innerHTML = "";
-		const messagesUi: UiMessage[] = Array.isArray(s.state?.messagesUi) ? s.state.messagesUi : [];
-		if (messagesUi.length === 0) {
+		const messages: any[] = Array.isArray(s.state?.messages) ? s.state.messages : [];
+		if (messages.length === 0) {
 			this.renderWelcomeScreen();
 		} else {
-			this.renderConversationMessagesUi(messagesUi);
+			this.renderConversationMessages(messages, Array.isArray(s.state?.toolUIEvents) ? s.state.toolUIEvents : []);
 		}
 		/* Update todos dock — show latest plan or hide if none */
 		this.renderTodosBar(s.state?.todos && s.state.todos.items.length > 0 ? s.state.todos : null);
@@ -1009,21 +1001,8 @@ export class ChatPanel implements ChatPanelHost {
 
 		this.abortCtrl = new AbortController();
 
-		/* Lazy-migrate old sessions before merging */
 		if (!s.state) s.state = {};
-		ensureMessagesUi(s.state);
-
 		const input = mergeState(s.state ?? null, content) as any;
-
-		/* Push the human message into the carried-over messagesUi */
-		const humanMsgDict = {
-			lc: 1,
-			type: "constructor",
-			id: ["langchain_core", "messages", "HumanMessage"],
-			kwargs: { content },
-		};
-		if (!Array.isArray(input.messagesUi)) input.messagesUi = [];
-		input.messagesUi.push(humanMsgDict);
 
 		await this.streamToShell(assistantShell, input, config, sessionModelId, s, extraSystemPrompt, activeModel, reasoningEffort);
 	}
@@ -1048,7 +1027,6 @@ export class ChatPanel implements ChatPanelHost {
 		let latestState: AgentState = {
 			...s.state,
 			messages: input.messages,
-			messagesUi: input.messagesUi,
 			compaction: input.compaction,
 			toolUIEvents: existingToolUIEvents,
 		};
@@ -1199,7 +1177,7 @@ export class ChatPanel implements ChatPanelHost {
 
 			/* Append action bar for completed messages */
 			if (shell.el.isConnected && shell.stackEl.children.length > 0) {
-				const lastAi = (latestState.messagesUi || []).filter((m: any) => messageKind(m) === "ai").pop();
+				const lastAi = (latestState.messages || []).filter((m: any) => messageKind(m) === "ai").pop();
 				this.appendActionBar(shell, lastAi ? messageContent(lastAi) : "");
 			}
 
@@ -1232,31 +1210,19 @@ export class ChatPanel implements ChatPanelHost {
 		if (this.abortCtrl) return;
 
 		const s = this.activeSession;
-		if (!s.state?.messagesUi?.length) return;
+		if (!s.state?.messages?.length) return;
 
-		/* 1. Trim state: remove trailing AI/Tool messages */
-		const ui: UiMessage[] = s.state.messagesUi;
-		let lastHumanIdx = -1;
-		for (let i = ui.length - 1; i >= 0; i--) {
-			if (messageKind(ui[i]) === "human" || messageKind(ui[i]) === "user") {
-				lastHumanIdx = i;
+		/* 1. Trim state: drop trailing AI/Tool messages after the last human turn */
+		const msgs = s.state.messages;
+		let lastHumanMsgIdx = -1;
+		for (let i = msgs.length - 1; i >= 0; i--) {
+			if (messageKind(msgs[i]) === "human" || messageKind(msgs[i]) === "user") {
+				lastHumanMsgIdx = i;
 				break;
 			}
 		}
-		if (lastHumanIdx < 0) return;
-		ui.length = lastHumanIdx + 1;
-
-		const msgs = s.state.messages;
-		if (Array.isArray(msgs)) {
-			let lastHumanMsgIdx = -1;
-			for (let i = msgs.length - 1; i >= 0; i--) {
-				if (messageKind(msgs[i]) === "human" || messageKind(msgs[i]) === "user") {
-					lastHumanMsgIdx = i;
-					break;
-				}
-			}
-			if (lastHumanMsgIdx >= 0) msgs.length = lastHumanMsgIdx + 1;
-		}
+		if (lastHumanMsgIdx < 0) return;
+		msgs.length = lastHumanMsgIdx + 1;
 
 		/* 2. Remove DOM */
 		const listEl = shell.el.parentElement;
@@ -1287,8 +1253,6 @@ export class ChatPanel implements ChatPanelHost {
 		this.abortCtrl = new AbortController();
 
 		if (!s.state) s.state = {};
-		ensureMessagesUi(s.state);
-
 		const input = mergeState(s.state ?? null) as any;
 
 		await this.streamToShell(newShell, input, config, sessionModelId, s, null, activeModel, reasoningEffort);
@@ -1316,22 +1280,6 @@ export class ChatPanel implements ChatPanelHost {
 				showMessage(this.t("chat.compact.tooFewTurns"));
 				return;
 			}
-
-			/* Append a notice-style ToolMessageUi */
-			if (!Array.isArray(s.state.messagesUi)) s.state.messagesUi = [];
-			const notice: ToolMessageUi = {
-				type: "tool_message_ui",
-				toolCallId: `compact-${Date.now().toString(36)}`,
-				toolName: "compact",
-				status: "done",
-				summary: this.t("chat.compact.summary", {
-					requirement: requirement || this.t("chat.compact.defaultRequirement"),
-				}),
-				events: [],
-				startedAt: Date.now(),
-				finishedAt: Date.now(),
-			};
-			s.state.messagesUi.push(notice);
 
 			s.updated = Date.now();
 			await this.store.saveSession(s);
@@ -1486,18 +1434,14 @@ export class ChatPanel implements ChatPanelHost {
 
 		for (const msg of messages) {
 			const type = messageKind(msg);
-			const content = msg.kwargs?.content ?? msg.content;
+			const content = messageContent(msg);
 			const toolCalls = messageToolCalls(msg);
-			const toolName = msg.kwargs?.name ?? msg.name;
 
 			if (type === "human" || type === "user") {
 				if (currentAssistantShell && lastAiContent) {
 					this.appendActionBar(currentAssistantShell, lastAiContent);
 				}
-				const { listEl } = this.createConversationTurn(
-					typeof content === "string" ? content : JSON.stringify(content),
-					targetEl,
-				);
+				const { listEl } = this.createConversationTurn(content, targetEl);
 				currentListEl = listEl;
 				currentAssistantShell = null;
 				lastAiContent = "";
@@ -1514,10 +1458,17 @@ export class ChatPanel implements ChatPanelHost {
 					currentAssistantShell = this.createAssistantMessageShell();
 					currentListEl.appendChild(currentAssistantShell.el);
 				}
-				if (typeof content === "string" && content) lastAiContent = content;
+				const reasoning = messageReasoning(msg);
+				if (reasoning) {
+					const reasoningEl = document.createElement("details");
+					reasoningEl.className = "chat-msg__reasoning";
+					reasoningEl.innerHTML = `<summary class="chat-msg__reasoning-summary"><span class="chat-msg__process-prefix"><span class="chat-msg__process-dot" aria-hidden="true"></span>${escapeHtml(this.t("chat.reasoning.process"))}</span></summary><div class="chat-msg__reasoning-content">${renderMarkdown(reasoning)}</div>`;
+					currentAssistantShell.stackEl.appendChild(reasoningEl);
+				}
+				if (content) lastAiContent = content;
 				const { toolCallIndex: nextToolCallIndex, toolEls } = this.appendAssistantSegment(
 					currentAssistantShell,
-					typeof content === "string" ? content : "",
+					content,
 					toolCalls,
 					toolUIEvents,
 					toolCallIndex,
@@ -1533,134 +1484,16 @@ export class ChatPanel implements ChatPanelHost {
 					const turn = this.createConversationTurn(undefined, targetEl);
 					currentListEl = turn.listEl;
 				}
-				const result = typeof content === "string" ? content : JSON.stringify(content);
+				const result = messageToolResult(msg);
 				const toolEl = this.findPendingToolElement(messageToolCallId(msg), pendingToolEls);
 				if (toolEl) {
 					this.appendToolResultToElement(toolEl, result);
 					this.finalizeToolElement(toolEl);
 				} else {
-					this.appendStaticMessage("tool", result, null, toolName, undefined, -1, currentListEl);
+					const resultPart = (Array.isArray(msg.content) ? msg.content : []).find((p: any) => p?.type === "tool-result");
+					this.appendStaticMessage("tool", result, null, resultPart?.toolName, undefined, -1, currentListEl);
 				}
 			}
-		}
-
-		if (currentAssistantShell) {
-			this.compactCompletedActivityBlocks(currentAssistantShell, "lookup");
-			if (lastAiContent) this.appendActionBar(currentAssistantShell, lastAiContent);
-		}
-	}
-
-	/**
-	 * Render conversation from `messagesUi`.
-	 *
-	 * UiMessage[] contains:
-	 *   - HumanMessage dicts  → conversation turn header
-	 *   - AIMessage dicts     → assistant shell with content + tool_calls
-	 *   - ToolMessageUi       → rendered via events, keyed by toolCallId
-	 *
-	 * AI messages and their following ToolMessageUi entries form one visual
-	 * "assistant turn".
-	 */
-	private renderConversationMessagesUi(messagesUi: UiMessage[], targetEl?: HTMLElement): void {
-		let currentListEl: HTMLElement | null = null;
-		let currentAssistantShell: AssistantMessageShell | null = null;
-		let lastAiContent = "";
-
-		/* Build toolCallId → args map from AI messages */
-		const toolCallArgsMap = new Map<string, unknown>();
-		for (const m of messagesUi) {
-			if (isToolMessageUi(m)) continue;
-			const toolCalls = messageToolCalls(m);
-			for (const tc of toolCalls) {
-				const tcId = toolCallId(tc);
-				if (tcId && tc.args) toolCallArgsMap.set(tcId, tc.args);
-			}
-		}
-
-		for (const m of messagesUi) {
-			if (isToolMessageUi(m)) {
-				/* ToolMessageUi: attach to current assistant shell */
-				if (!currentListEl) {
-					const turn = this.createConversationTurn(undefined, targetEl);
-					currentListEl = turn.listEl;
-				}
-				if (!currentAssistantShell) {
-					currentAssistantShell = this.createAssistantMessageShell();
-					currentListEl.appendChild(currentAssistantShell.el);
-				}
-				const args = toolCallArgsMap.get(m.toolCallId);
-				const toolEl = this.createToolCallElement(m.toolName, args, undefined, m.toolCallId);
-				this.attachToolElementToShell(currentAssistantShell, toolEl);
-				if (m.events.length > 0) {
-					for (const event of m.events) {
-						this.applyToolUIEvent(toolEl, event);
-					}
-				} else if (m.summary) {
-					/* No events but has a summary (e.g. /compact notice) */
-					const details = toolEl.querySelector("details");
-					const summary = details?.querySelector("summary");
-					if (summary) {
-						summary.innerHTML = this.buildToolSummaryHtml(
-							m.toolName,
-							`<span class="chat-msg__doc-meta">${escapeHtml(m.summary)}</span>`,
-						);
-					}
-				}
-				if (m.status === "done" || m.status === "error") {
-					this.finalizeToolElement(toolEl);
-				}
-				this.scrollToBottom();
-				continue;
-			}
-
-			const type = messageKind(m);
-			const content = messageContent(m);
-			const reasoning = messageReasoning(m);
-
-			if (type === "human" || type === "user") {
-				if (currentAssistantShell && lastAiContent) {
-					this.appendActionBar(currentAssistantShell, lastAiContent);
-				}
-				const { listEl } = this.createConversationTurn(
-					typeof content === "string" ? content : JSON.stringify(content),
-					targetEl,
-				);
-				currentListEl = listEl;
-				currentAssistantShell = null;
-				lastAiContent = "";
-				continue;
-			}
-
-			if (type === "ai") {
-				if (!currentListEl) {
-					const turn = this.createConversationTurn(undefined, targetEl);
-					currentListEl = turn.listEl;
-				}
-				if (!currentAssistantShell) {
-					currentAssistantShell = this.createAssistantMessageShell();
-					currentListEl.appendChild(currentAssistantShell.el);
-				}
-				if (reasoning) {
-					const reasoningEl = document.createElement("details");
-					reasoningEl.className = "chat-msg__reasoning";
-					reasoningEl.innerHTML = `<summary class="chat-msg__reasoning-summary"><span class="chat-msg__process-prefix"><span class="chat-msg__process-dot" aria-hidden="true"></span>${escapeHtml(this.t("chat.reasoning.process"))}</span></summary><div class="chat-msg__reasoning-content">${renderMarkdown(reasoning)}</div>`;
-					currentAssistantShell.stackEl.appendChild(reasoningEl);
-				}
-				if (content) {
-					lastAiContent = content;
-					this.compactCompletedActivityBlocks(currentAssistantShell, "lookup");
-					const textEl = document.createElement("div");
-					textEl.className = "chat-msg__text";
-					textEl.innerHTML = renderMarkdown(content);
-					currentAssistantShell.stackEl.appendChild(textEl);
-				}
-				/* Tool call elements are created by the subsequent
-				   ToolMessageUi entries — not here. */
-				this.scrollToBottom();
-				continue;
-			}
-
-			/* Unknown message type — skip */
 		}
 
 		if (currentAssistantShell) {

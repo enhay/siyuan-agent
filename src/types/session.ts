@@ -1,4 +1,4 @@
-import type { ToolUIEvent, UiMessage } from "./tool-events";
+import type { ToolUIEvent } from "./tool-events";
 import type { ReasoningEffort } from "./model-config";
 
 /* ── TodoList (agent plan management) ────────────────────────────────── */
@@ -30,11 +30,11 @@ export interface CompactionState {
 /* ── Agent state ────────────────────────────────────────────────────── */
 
 export type AgentState = Record<string, any> & {
+	/** The single message track: AI SDK `ModelMessage[]` (LLM context + UI render source). */
 	messages?: any[];
-	messagesUi?: UiMessage[];
 	compaction?: CompactionState;
 	todos?: TodoList;
-	/** @deprecated kept for lazy migration only */
+	/** Rich tool UI cards, keyed by toolCallId; paired with `messages` at render time. */
 	toolUIEvents?: ToolUIEvent[];
 };
 

@@ -6,13 +6,7 @@
 import type { AgentState, ToolUIEventPayload } from "../types";
 import type { ModelServiceConfig, McpServerConfig } from "../types";
 import { defaultTranslator, type Translator } from "../i18n";
-import {
-	messageKind,
-	messageContent,
-	messageToolCalls,
-	setMessageContent,
-	setMessageToolCalls,
-} from "../core/message-shape";
+import { messageKind, messageContent } from "../core/message-shape";
 
 /* ── Interfaces ──────────────────────────────────────────────────────── */
 
@@ -70,39 +64,8 @@ export function sessionTitle(state: AgentState): string {
 		return t === "human" || t === "user";
 	});
 	if (!first) return "New Chat";
-	const rawContent = first.kwargs?.content ?? first.content;
-	const text = (typeof rawContent === "string" ? rawContent : "").replace(/^>.*\n\n/s, "").trim();
+	const text = messageContent(first).replace(/^>.*\n\n/s, "").trim();
 	return text.length > 30 ? text.slice(0, 30) + "..." : text;
-}
-
-export function cloneMessage(raw: Record<string, any>): Record<string, any> {
-	return {
-		...raw,
-		kwargs: raw.kwargs ? { ...raw.kwargs } : raw.kwargs,
-	};
-}
-
-export function normalizeMessagesForDisplay(messages: any[]): any[] {
-	const normalized: any[] = [];
-	for (const raw of messages || []) {
-		const type = messageKind(raw);
-		if (type !== "ai") {
-			normalized.push(raw);
-			continue;
-		}
-
-		const prev = normalized[normalized.length - 1];
-		if (prev && messageKind(prev) === "ai") {
-			const merged = cloneMessage(prev);
-			setMessageContent(merged, messageContent(prev) + messageContent(raw));
-			setMessageToolCalls(merged, [...messageToolCalls(prev), ...messageToolCalls(raw)]);
-			normalized[normalized.length - 1] = merged;
-			continue;
-		}
-
-		normalized.push(cloneMessage(raw));
-	}
-	return normalized;
 }
 
 export function escapeHtml(text: string): string {

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { mergeState, runAgentStream } from "../src/core/stream-runtime";
 import { defineTool } from "../src/core/tools/define-tool";
 import { toolSetFromArray } from "../src/core/agent";
-import { isToolMessageUi } from "../src/types";
+import { messageContent, messageReasoning, messageKind } from "../src/core/message-shape";
 import type { AgentStreamUiEvent } from "../src/types";
 
 const usage = { inputTokens: { total: 1 }, outputTokens: { total: 1 }, totalTokens: { total: 2 } };
@@ -24,19 +24,16 @@ const lcHuman = (content: string) => ({
 
 describe("mergeState", () => {
 	it("converts saved lc:1 messages to ModelMessage[] and appends the new human turn", () => {
-		const saved = { messages: [lcHuman("earlier")], messagesUi: [lcHuman("earlier")] };
-		const out = mergeState(saved, "now");
+		const out = mergeState({ messages: [lcHuman("earlier")] }, "now");
 		expect(out.messages).toEqual([
 			{ role: "user", content: "earlier" },
 			{ role: "user", content: "now" },
 		]);
-		expect(out.messagesUi).toHaveLength(1);
 	});
 
 	it("handles a null state", () => {
 		const out = mergeState(null, "hi");
 		expect(out.messages).toEqual([{ role: "user", content: "hi" }]);
-		expect(out.messagesUi).toEqual([]);
 	});
 });
 
@@ -71,13 +68,11 @@ describe("runAgentStream", () => {
 		]);
 		expect(events.filter((e) => e.type === "text_delta").map((e: any) => e.text)).toEqual(["Hello", " world"]);
 		expect(result.completed).toBe(true);
-		// LLM-context messages: the user turn + the assistant response
+		// single message track: user turn + assistant response
 		expect(result.lastState.messages?.[0]).toEqual({ role: "user", content: "hi" });
-		expect(result.lastState.messages?.length).toBe(2);
-		// messagesUi has the streamed AI message
-		const aiUi = (result.lastState.messagesUi || []).find((m: any) => !isToolMessageUi(m));
-		expect(aiUi?.kwargs?.content).toBe("Hello world");
-		expect(aiUi?.kwargs?.additional_kwargs?.reasoning_content).toBe("Think more.");
+		const assistant = (result.lastState.messages || []).find((m: any) => messageKind(m) === "ai");
+		expect(messageContent(assistant)).toBe("Hello world");
+		expect(messageReasoning(assistant)).toBe("Think more.");
 	});
 
 	it("runs the tool loop, surfaces tool_call/tool_result + custom tool_ui bound to the toolCallId", async () => {
@@ -122,8 +117,10 @@ describe("runAgentStream", () => {
 		expect(result.lastState.toolUIEvents).toEqual([
 			expect.objectContaining({ toolCallId: "call-1", toolCallIndex: 0, toolName: "search_fulltext" }),
 		]);
-		// messagesUi: one AI message + one ToolMessageUi for the call
-		expect((result.lastState.messagesUi || []).filter((m: any) => isToolMessageUi(m))).toHaveLength(1);
+		// the message track carries the tool turn (assistant tool-call + tool result + final text)
+		const kinds = (result.lastState.messages || []).map((m: any) => messageKind(m));
+		expect(kinds).toContain("tool");
+		expect(kinds.filter((k: string) => k === "ai").length).toBeGreaterThanOrEqual(1);
 	});
 
 	it("intercepts write_todos emits into a todos_update event + lastState.todos", async () => {

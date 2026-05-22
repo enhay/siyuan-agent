@@ -2,10 +2,10 @@
  * stream-runtime — the streaming engine, on AI SDK v6 `streamText`.
  *
  * `runAgentStream` runs the agent loop and translates `result.fullStream` parts
- * into the stable {@link AgentStreamUiEvent} contract the UI renders, and builds
- * the persisted `messagesUi` (lc:1 dicts via {@link UiMessageBuilder}) plus the
- * LLM-context `messages` (AI SDK `ModelMessage[]`). Tool custom UI events arrive
- * out-of-band through `experimental_context.emit` (see define-tool.ts).
+ * into the stable {@link AgentStreamUiEvent} contract the UI renders live, and
+ * builds the persisted state: a single `messages` track (AI SDK `ModelMessage[]`)
+ * plus `toolUIEvents` (the rich tool cards, keyed by toolCallId). Tool custom UI
+ * events arrive out-of-band via `experimental_context.emit` (see define-tool.ts).
  */
 
 import { streamText, stepCountIs, type ModelMessage } from "ai";
@@ -18,9 +18,7 @@ import type {
 	TodoList,
 	ToolUIEvent,
 	ToolUIEventPayload,
-	UiMessage,
 } from "../types";
-import { UiMessageBuilder } from "./ui-message-builder";
 import { genId, toModelMessages } from "./message-shape";
 
 /** Parse a tool writer payload (already an object) into a typed ToolUIEvent. */
@@ -88,19 +86,6 @@ function normalizeToolUIEvent(parsed: any, raw: string, toolCallIndex: number, t
 	};
 }
 
-/** Build a serialised lc:1 AI dict for `messagesUi`, mirroring the persisted format. */
-function buildCurrentAiDict(content: string, reasoning: string, toolCalls: any[]): Record<string, any> | null {
-	if (!content && !reasoning && toolCalls.length === 0) return null;
-	const kwargs: Record<string, any> = { content };
-	if (reasoning) kwargs.additional_kwargs = { reasoning_content: reasoning };
-	if (toolCalls.length > 0) kwargs.tool_calls = [...toolCalls];
-	return { lc: 1, type: "constructor", id: ["langchain_core", "messages", "AIMessage"], kwargs };
-}
-
-function isErrorResult(result: string): boolean {
-	return /^Error:|^\[(子智能体执行失败|Sub-agent failed)\]|^ToolError:|"error":/i.test(result);
-}
-
 function isAbortError(error: unknown, signal?: AbortSignal): boolean {
 	if (signal?.aborted) return true;
 	if (!error || typeof error !== "object") return false;
@@ -111,13 +96,11 @@ function isAbortError(error: unknown, signal?: AbortSignal): boolean {
 export function mergeState(
 	savedState: Record<string, any> | null,
 	inputMsgStr?: string,
-): { messages: ModelMessage[]; messagesUi: UiMessage[]; compaction?: any; todos?: TodoList } {
+): { messages: ModelMessage[]; compaction?: any; todos?: TodoList } {
 	const messages = toModelMessages(savedState?.messages ?? []);
 	if (inputMsgStr) messages.push({ role: "user", content: inputMsgStr });
-	const messagesUi = Array.isArray(savedState?.messagesUi) ? [...savedState!.messagesUi] : [];
 	return {
 		messages,
-		messagesUi,
 		compaction: savedState?.compaction ? { ...savedState.compaction } : undefined,
 		todos: savedState?.todos,
 	};
@@ -142,7 +125,7 @@ export interface RunAgentStreamParams {
 	system: string;
 	tools: AgentToolSet;
 	providerOptions?: Record<string, Record<string, unknown>>;
-	input: { messages: ModelMessage[]; messagesUi?: UiMessage[]; compaction?: any; todos?: TodoList };
+	input: { messages: ModelMessage[]; compaction?: any; todos?: TodoList };
 	signal?: AbortSignal;
 	recursionLimit?: number;
 	existingToolUIEvents?: ToolUIEvent[];
@@ -160,34 +143,13 @@ export async function runAgentStream({
 	existingToolUIEvents = [],
 	onUiEvent,
 }: RunAgentStreamParams): Promise<RunAgentStreamResult> {
-	const uiBuilder = Array.isArray(input.messagesUi) && input.messagesUi.length > 0
-		? UiMessageBuilder.fromExisting(input.messagesUi)
-		: new UiMessageBuilder();
-
 	const toolUIEvents: ToolUIEvent[] = [...existingToolUIEvents];
 	const toolCallMap: Record<string, { index: number; name?: string }> = {};
 	let lastToolCallIndex = -1;
 	let latestTodos: TodoList | undefined;
+	let reasoningTotal = ""; // reasoning_delta carries the cumulative text
 
-	// Per-step accumulators (reset at each step boundary so each agent step
-	// becomes its own AI message in messagesUi).
-	let contentBuffer = "";
-	let stepReasoning = "";
-	let pendingToolCalls: any[] = [];
-	// Display-total reasoning (the reasoning_delta event carries the cumulative text).
-	let reasoningTotal = "";
-
-	const updateAiDict = () => {
-		const dict = buildCurrentAiDict(contentBuffer, stepReasoning, pendingToolCalls);
-		if (dict) uiBuilder.pushOrUpdateAi(dict);
-	};
-	const resetStep = () => {
-		contentBuffer = "";
-		stepReasoning = "";
-		pendingToolCalls = [];
-	};
-
-	// Tool custom UI events arrive here via experimental_context.emit(toolCallId, payload).
+	// Tool custom UI events arrive via experimental_context.emit(toolCallId, payload).
 	// streamText runs tool execute() eagerly, so an emit can fire BEFORE this loop
 	// has processed the matching `tool-call` part. Buffer such early emits and flush
 	// them once the tool call is registered (so they bind to the right card).
@@ -202,7 +164,6 @@ export async function runAgentStream({
 			event.toolName = event.toolName || mapped.name;
 		}
 		toolUIEvents.push(event);
-		uiBuilder.onToolUiEvent(event);
 		onUiEvent?.({ type: "tool_ui", event });
 	};
 
@@ -263,23 +224,18 @@ export async function runAgentStream({
 					const text = (part as any).text ?? "";
 					if (!text) break;
 					reasoningTotal += text;
-					stepReasoning += text;
 					onUiEvent?.({ type: "reasoning_delta", text: reasoningTotal });
-					updateAiDict();
 					break;
 				}
 				case "text-delta": {
 					const text = (part as any).text ?? "";
 					if (!text) break;
-					contentBuffer += text;
 					onUiEvent?.({ type: "text_delta", text });
-					updateAiDict();
 					break;
 				}
 				case "tool-call": {
 					const tc = part as any;
 					lastToolCallIndex += 1;
-					pendingToolCalls.push({ id: tc.toolCallId, name: tc.toolName, args: tc.input });
 					toolCallMap[tc.toolCallId] = { index: lastToolCallIndex, name: tc.toolName };
 					onUiEvent?.({
 						type: "tool_call_start",
@@ -288,9 +244,6 @@ export async function runAgentStream({
 						toolCallId: tc.toolCallId,
 						args: tc.input,
 					});
-					updateAiDict();
-					uiBuilder.onToolCallStart(tc.toolName, tc.toolCallId);
-					// Flush any tool UI events that executed before this part arrived.
 					const buffered = pendingEmits[tc.toolCallId];
 					if (buffered) {
 						delete pendingEmits[tc.toolCallId];
@@ -301,22 +254,15 @@ export async function runAgentStream({
 				case "tool-result": {
 					const tc = part as any;
 					const out = typeof tc.output === "string" ? tc.output : JSON.stringify(tc.output);
-					uiBuilder.onToolResult(tc.toolCallId, isErrorResult(out));
 					onUiEvent?.({ type: "tool_result", toolCallId: tc.toolCallId, result: out });
-					resetStep();
 					break;
 				}
 				case "tool-error": {
 					const tc = part as any;
 					const msg = tc.error instanceof Error ? tc.error.message : String(tc.error);
-					uiBuilder.onToolResult(tc.toolCallId, true);
 					onUiEvent?.({ type: "tool_result", toolCallId: tc.toolCallId, result: msg });
-					resetStep();
 					break;
 				}
-				case "finish-step":
-					resetStep();
-					break;
 				case "abort":
 					aborted = true;
 					break;
@@ -337,7 +283,7 @@ export async function runAgentStream({
 		for (const p of payloads) flushToolEvent(id, p);
 	}
 
-	// LLM-context messages: previous context + this turn's response messages.
+	// Single persisted track: prior context + this turn's generated messages.
 	let responseMessages: ModelMessage[] = [];
 	try {
 		responseMessages = ((await result.response).messages as ModelMessage[]) ?? [];
@@ -347,7 +293,6 @@ export async function runAgentStream({
 
 	const lastState: AgentState = {};
 	lastState.messages = [...input.messages, ...responseMessages];
-	lastState.messagesUi = uiBuilder.finalise();
 	lastState.toolUIEvents = toolUIEvents;
 	lastState.compaction = input.compaction;
 	lastState.todos = latestTodos ?? input.todos;

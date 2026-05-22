@@ -132,27 +132,3 @@ export interface RunAgentStreamResult {
 	completed: boolean;
 	error?: unknown;
 }
-
-/* ── ToolMessageUi: replaces raw ToolMessage in the UI layer ─────────── */
-
-export interface ToolMessageUi {
-	type: "tool_message_ui";
-	toolCallId: string;
-	toolName: string;
-	status: "running" | "done" | "error";
-	summary?: string;
-	events: ToolUIEvent[];
-	startedAt: number;
-	finishedAt?: number;
-}
-
-/**
- * A single element in `messagesUi`.
- *   - HumanMessage / AIMessage are kept as LangChain objects (serialised dict).
- *   - ToolMessage is *never* stored; ToolMessageUi takes its place.
- */
-export type UiMessage = Record<string, any> | ToolMessageUi;
-
-export function isToolMessageUi(m: UiMessage): m is ToolMessageUi {
-	return (m as any).type === "tool_message_ui";
-}

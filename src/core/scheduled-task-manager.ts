@@ -99,10 +99,6 @@ export function appendTaskRunState(existingState: AgentState | undefined, latest
 			...(Array.isArray(existingState?.messages) ? existingState!.messages : []),
 			...(Array.isArray(latestState.messages) ? latestState.messages : []),
 		],
-		messagesUi: [
-			...(Array.isArray(existingState?.messagesUi) ? existingState!.messagesUi : []),
-			...(Array.isArray(latestState.messagesUi) ? latestState.messagesUi : []),
-		],
 		toolUIEvents: [
 			...(Array.isArray(existingState?.toolUIEvents) ? existingState!.toolUIEvents : []),
 			...(Array.isArray(latestState.toolUIEvents) ? latestState.toolUIEvents : []),
@@ -421,14 +417,6 @@ export class ScheduledTaskManager {
 			const guideContent = config.guideDoc?.id ? await fetchGuideDoc(config.guideDoc.id) : "";
 			const agent = makeAgent(config, this.options.getTools(), { i18n, guideContent });
 			const input = mergeState(null, buildScheduledTaskRunPrompt(task, startedAt, i18n));
-			/* Ensure the human message also appears in messagesUi */
-			const promptContent = buildScheduledTaskRunPrompt(task, startedAt, i18n);
-			input.messagesUi = [{
-				lc: 1,
-				type: "constructor",
-				id: ["langchain_core", "messages", "HumanMessage"],
-				kwargs: { content: promptContent },
-			}];
 			const result = await runAgentStream({
 				...agent,
 				input,
@@ -442,13 +430,6 @@ export class ScheduledTaskManager {
 			lastError = normalizeError(error, i18n);
 			const errorContent = `${i18n.t("scheduled.error.marker")}\n\n${lastError}`;
 			const errorState = mergeState(null, errorContent) as AgentState;
-			/* Ensure the error human message also appears in messagesUi */
-			errorState.messagesUi = [{
-				lc: 1,
-				type: "constructor",
-				id: ["langchain_core", "messages", "HumanMessage"],
-				kwargs: { content: errorContent },
-			}];
 			latestState = appendTaskRunState(undefined, errorState);
 		}
 

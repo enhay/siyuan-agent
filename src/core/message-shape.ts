@@ -1,15 +1,11 @@
 /**
  * message-shape — the single seam that knows how messages are wire-encoded.
  *
- * Two shapes coexist after the AI SDK migration:
- *   - `messagesUi` entries: `lc:1` constructor dicts (plain JSON, NOT LangChain
- *     instances) and `ToolMessageUi` — the persisted/rendered UI track.
- *   - `state.messages` entries: AI SDK `ModelMessage` (role + string|parts) —
- *     the LLM context track fed to `streamText`/`generateText`.
- *
- * Every consumer reads messages through these accessors, which transparently
- * handle lc:1 dicts, simplified `{type|role, content}` dicts, and ModelMessage
- * (string content or a `parts` array). A wire-format change touches this file.
+ * `state.messages` is a single AI SDK `ModelMessage[]` track — both the LLM
+ * context (fed to `streamText`/`generateText`) and the UI render source. These
+ * accessors transparently handle ModelMessage (role + string|parts) plus legacy
+ * lc:1 / simplified `{type|role, content}` dicts, so older saved messages still
+ * read. A wire-format change touches this file.
  */
 
 import type { ModelMessage } from "ai";
@@ -89,6 +85,16 @@ export function messageToolCalls(message: any): any[] {
 	if (Array.isArray(toolCalls)) return toolCalls;
 	const parts = contentParts(message).filter((p) => p?.type === "tool-call");
 	return parts.map((p) => ({ id: p.toolCallId, name: p.toolName, args: p.input }));
+}
+
+/** Result text of a tool message: string content, or a ModelMessage tool-result part. */
+export function messageToolResult(message: any): string {
+	const direct = messageContent(message);
+	if (direct) return direct;
+	const part = contentParts(message).find((p) => p?.type === "tool-result");
+	const out = part?.output;
+	if (!out) return "";
+	return out.type === "text" ? String(out.value ?? "") : JSON.stringify(out.value ?? "");
 }
 
 /** A single tool_call / tool_call_chunk's id; "" if absent. */

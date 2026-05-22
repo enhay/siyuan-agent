@@ -2,9 +2,9 @@
  * Tasks view delegate – extracted from ChatPanel for maintainability.
  */
 import { showMessage } from "siyuan";
-import type { ScheduledTaskMeta, ToolUIEvent, UiMessage } from "../types";
+import type { ScheduledTaskMeta, ToolUIEvent } from "../types";
 import type { ScheduledTaskManager } from "../core/scheduled-task-manager";
-import { escapeHtml, normalizeMessagesForDisplay } from "./chat-helpers";
+import { escapeHtml } from "./chat-helpers";
 import { groupTaskRuns, type TaskRunGroup } from "./task-run-group";
 import { presetToSchedule, scheduleToPreset, DEFAULT_TIME, type SchedulePreset } from "../core/schedule-presets";
 import { defaultTranslator, type Translator } from "../i18n";
@@ -19,8 +19,6 @@ export interface TasksViewContext {
 	i18n?: Translator;
 	/** Render a set of conversation messages into the given container. */
 	renderConversationMessages: (messages: any[], toolUIEvents: ToolUIEvent[], targetEl: HTMLElement) => void;
-	/** Render UiMessage-based conversation into the given container. */
-	renderConversationMessagesUi: (messagesUi: UiMessage[], targetEl: HTMLElement) => void;
 }
 
 /* ── TasksView class ─────────────────────────────────────────────────── */
@@ -236,10 +234,9 @@ export class TasksView {
 		const task = selected.task;
 
 		/* Execution history: split into run groups */
-		const messages = normalizeMessagesForDisplay(selected.state?.messages || []);
+		const messages = selected.state?.messages || [];
 		const toolUIEvents = Array.isArray(selected.state?.toolUIEvents) ? selected.state.toolUIEvents as ToolUIEvent[] : [];
-		const messagesUi = Array.isArray(selected.state?.messagesUi) ? selected.state.messagesUi as UiMessage[] : [];
-		const runGroups = groupTaskRuns(messages, toolUIEvents, messagesUi);
+		const runGroups = groupTaskRuns(messages, toolUIEvents);
 		const historyHtml = this.renderRunGroupsHtml(runGroups);
 
 		/* Build detail view */
@@ -314,11 +311,7 @@ export class TasksView {
 			const timeLabel = group.runAt || this.t("common.unknownTime");
 
 			const host = document.createElement("div");
-			if (group.messagesUi.length > 0) {
-				this.ctx.renderConversationMessagesUi(group.messagesUi, host);
-			} else {
-				this.ctx.renderConversationMessages(group.messages, group.toolUIEvents, host);
-			}
+			this.ctx.renderConversationMessages(group.messages, group.toolUIEvents, host);
 			const bodyHtml = host.innerHTML || `<div class="chat-session-list__empty">${escapeHtml(this.t("common.noContent"))}</div>`;
 
 			return `<details class="task-run-card ${statusClass}" ${isLatest ? "open" : ""}>

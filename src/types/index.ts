@@ -33,9 +33,6 @@ export {
 	type ToolUIEvent,
 	type AgentStreamUiEvent,
 	type RunAgentStreamResult,
-	type ToolMessageUi,
-	type UiMessage,
-	isToolMessageUi,
 } from "./tool-events";
 
 export {
