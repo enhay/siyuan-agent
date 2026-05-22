@@ -4,6 +4,8 @@
 > 前置评估见对话结论：Mastra 因 Node 服务端耦合（`node:fs/os/child_process`、hono、execa）不可在 SiYuan 渲染端运行而被否决；AI SDK 是「脱离 LangChain 又留在客户端」的唯一可行底座。
 > **本设计明确不考虑向后兼容**：旧会话（LangChain `lc:1` dict 序列化）允许直接失效，不写迁移脚本、不留 shim。
 
+> **最后核实**：2026-05-22 — 行数表（§1）、reasoning 现状（§5.2）、`config.reasoningTag` 缺口已对当前 `src/` 重新核对；源码克隆 `ai@6.0.177` 在位。**两步迁移评估见 §11（v6→v7）**。
+>
 > **参考源码**：AI SDK 已浅克隆到 `/home/zhaohua/code/demo/ai-sdk`，pin 在 tag `ai@6.0.177`（与 Mastra bundle 同版本）。本文档中标「✅ 已对源码核实」的 API 即据此版本。关键路径：
 > - 流式 part 类型：`packages/ai/src/generate-text/stream-text.ts`
 > - 工具执行上下文 `experimental_context`：`packages/ai/src/generate-text/execute-tool-call.ts`、`run-tools-transformation.ts`
@@ -12,21 +14,49 @@
 
 ---
 
+## 0. Review 修正（2026-05-22 子代理评审，必读，优先级高于下文相应段落）
+
+已对 `ai@6.0.177` 克隆源码 + 当前 `src/` 复核。**结论：GO-WITH-FIXES**——核心论点成立（reasoning 回填 hack 确可删；流式状态机确可删，`run-tools-transformation.ts:255-411` 内置去重/partial 拼装），但下列修正在执行前生效：
+
+**阻断项（必须先改）**
+
+- **B1 「UI 大概率不动」对历史回放不成立。** 直播流靠 `AgentStreamUiEvent` 契约确实不动，但**历史消息渲染**直接读 LangChain dict 形状：`chat-panel.ts:51-53,1204,1490-1620`（`messageKind/Content/Reasoning/ToolCalls`、构造 `humanMsgDict`）、`chat-helpers.ts:10-15,69-98`。§6 把 `messages/messagesUi` 改成 `UIMessage[]` 时，**这两个文件必须改**（或：`messagesUi` 仍持久化 LangChain dict 形状以解耦，但那削弱 §6「删双轨」收益）。§4/§10「UI 不动」需修正为「直播流不动、历史回放需改」。
+- **B2 `src/core/message-shape.ts` 漏列。** 它 `import {AIMessage,...} from "@langchain/core/messages"`（:13-19），被 `ui-message-builder/compaction/chat-helpers/chat-panel/sub-agent` 共用。§9「不留 LangChain import」要求它必须重写或删除——§10 清单需补上它。
+- **B3 Wave 1 两个「并行」任务撞 `src/core/agent-types.ts`。** model 任务改 `AgentModel`、tools 任务改 `AgentTool`，二者同文件（:13,16）。**修正：把 agent-types.ts 的两个别名重定义（`AgentModel=LanguageModel`、`AgentTool=Tool` from `ai`）上提到 Wave 0**，之后两任务文件不相交方可真并行。该文件原也漏列于 §10。
+- **B4 §5.2 reasoningEffort 走错 `providerOptions` 键。** 非 deepseek 路用 `createOpenAICompatible`，其 `providerOptions` 以**传入的 `name`** 为键，不是 `openai`（`openai-compatible-chat-options.ts:15` 收 `reasoningEffort:z.string()`，映射到 `reasoning_effort`，见 `...-chat-language-model.ts:261`）。写 `{openai:{...}}` 会被静默丢弃。另：现插件发的是 `thinking:{type}`（`chat-model.ts:18-25`）不是 `reasoning_effort`，是行为变化，需显式决策。
+- **B5 兼容路的 reasoning 回填是「无条件」的，可重新触发 R1 的 400。** 原生 `@ai-sdk/deepseek` 对 R1/V4 有过滤（`convert-to-deepseek-chat-messages.ts:101-133`：R1 不收先前 reasoning）；`@ai-sdk/openai-compatible` **对每个 assistant 轮都发 `reasoning_content`**（`convert-to-openai-compatible-chat-messages.ts:206`，无过滤）。插件现在把「思维兼容端点」走兼容路（`chat-model.ts:62-64`）。**修正：任何 R1 类端点必须走 `@ai-sdk/deepseek`**，或文档声明「代理 R1 经兼容端点」不支持。这是「最危险删除」上文档唯一没说全的点。
+
+**非阻断修正**
+
+- **§5.3 part 列表有错项。** `tool-input-available/-error`、`tool-output-available/-error`、`tool-approval-response` 属 `toUIMessageStream` 的 `UIMessageChunk`，**不在 `fullStream`**（`stream-text-result.ts:375-469`）。`fullStream` 工具/审批 part 只有 `tool-call/-result/-error`、`tool-output-denied`、`tool-approval-request`。代码实际 switch 的那些（text-delta/reasoning-delta/tool-call/tool-result/tool-error/abort/finish）全对，只是列表别让人写出死 case。
+- **§3 版本：`@ai-sdk/deepseek` 是 `^2`（克隆实测 2.0.34），不是 `^1`。** 其余 `@ai-sdk/mcp ^1`(1.0.41)、`@ai-sdk/openai ^3`(3.0.63)、`@ai-sdk/openai-compatible ^2`(2.0.47) 正确。
+- **§5.4 seam 已存在，工作量被高估反了。** `define-tool.ts:26-50` 已有 `ToolEmitContext`/`runtimeToEmitContext`，工具已是 `(args,ctx)=>ctx.emit(payload)`（`siyuan-api.ts:22-42`）。**真正 Wave 1 tools 工作 = 只重写 `define-tool.ts` 一个文件**（包 `ai` 的 `tool()`，把 `experimental_context`+`toolCallId`→`ToolEmitContext`）；6 个 `*-tools.ts` 与 `siyuan-api.ts` 几乎不动。别按 §5.4 给 emit 再加 `toolCallId` 入参（那是回归，现在自动附）。另 `sub-agent.ts:2` 也 import 了 LangChain `tool`，需一起换。
+- **§5.6 token 估算无 `maxInputTokens` 耦合（§5.2 的「唯一前置检查」可消除）。** `compaction.ts` 按字符数+轮数触发（:32-43,160-168），`DEEPSEEK_PROFILES` 仅 `deepseek.ts:211-212` 用——删 deepseek.ts 即清，无需迁表。但 `compaction.ts` 通篇读 LangChain 形状（`messageKind`、`m?.kwargs?.tool_calls`），「逻辑保留仅换模型调用」**低估了**：`splitTurns/turnsToText/charCount` 需按 `UIMessage[]` 重写。
+- **路径错：`ui-message-builder.ts` 在 `src/core/` 不在 `src/ui/`**（§1/§4/§10 均误）。它且全程 LangChain 形状耦合（`src/core/ui-message-builder.ts:8,53,134,191-205`）——属被重写层，不是「不动」层。
+- **§5.8 命名统一用 `createMCPClient`（稳定导出），别用 §4/§8 的 `experimental_createMCPClient`（废弃别名）。**
+- **§5.2 `xhigh` 无需降级。** 原生 OpenAI 支持 `xhigh`（`openai-responses-options.ts:237-241`，GPT-5.1-Codex-Max）。
+
+**已核实无误（不必改）**：`experimental_context`+`toolCallId` 在 tool `execute` 第二参（`execute-tool-call.ts:106-112`）；`createOpenAICompatible`/`createDeepSeek`/`wrapLanguageModel`+`extractReasoningMiddleware`/`stepCountIs`/`convertToModelMessages`/`createMCPClient` 签名；`convertToModelMessages` 确实带回 `reasoning` part（`convert-to-model-messages.ts:169-174`）。
+
+---
+
 ## 1. 背景与范围
 
 ### 现状（被替换面）
 
+> 行数为 2026-05-22 实测（旧值已漂移，下表为现值）。
+
 | 文件 | 行数 | 角色 | LangChain 依赖 |
 |---|---|---|---|
-| `src/core/agent.ts` | 85 | `makeAgent`(createAgent+middleware)、`makeTracer` | `createAgent`, `summarizationMiddleware`, `LangChainTracer`, `langsmith` |
-| `src/core/chat-model.ts` | 59 | 模型工厂 | `ChatOpenAI`, `BaseChatModel` |
-| `src/llms/deepseek.ts` | 290 | `ChatDeepSeek` 子类 patch `reasoning_content` | `ChatOpenAI`, `AIMessageChunk`, `ChatGenerationChunk` |
-| `src/llms/reasoning.ts` | 50 | `injectReasoningContent` 手工回填思维链 | `BaseMessage` |
-| `src/core/stream-runtime.ts` | 532 | 流式引擎：`agent.stream(streamMode)` → chunk 解析 | 全套 message 类 + streamMode |
+| `src/core/agent.ts` | 99 | `makeAgent`(createAgent+middleware)、`makeTracer` | `createAgent`, `summarizationMiddleware`, `LangChainTracer`, `langsmith` |
+| `src/core/chat-model.ts` | 66 | 模型工厂；调用 `patchReasoningRoundTrip` | `ChatOpenAI`, `BaseChatModel` |
+| `src/llms/deepseek.ts` | 222 | `ChatDeepSeek` 子类 patch `reasoning_content`、`<think>` 流解析 | `ChatOpenAI`, `AIMessageChunk`, `ChatGenerationChunk` |
+| `src/llms/reasoning.ts` | 155 | `injectReasoningContent` + `patchReasoningRoundTrip`（**原型猴补丁**）+ `ModelProfile`/`DEEPSEEK_PROFILES` + 临时 debug 落盘块 | `BaseMessage` |
+| `src/core/stream-runtime.ts` | 572 | 流式引擎：`agent.stream(streamMode)` → chunk 解析 | 全套 message 类 + streamMode |
 | `src/core/compaction.ts` | 169 | 手动 `/compact` | `HumanMessage`, `BaseChatModel.invoke` |
-| `src/core/sub-agent.ts` | 123 | `explore_notes` 子 agent 手写工具循环 | `tool`, `HumanMessage` |
+| `src/core/sub-agent.ts` | 138 | `explore_notes` 子 agent 手写工具循环 | `tool`, `HumanMessage` |
 | `src/core/mcp-client.ts` | 330 | MCP server → LangChain tool 包装 | `tool` |
-| `src/core/tools/*.ts` (8 文件) | — | 19 个工具，`tool(fn,{schema})` + `runtime.writer()` | `tool`, `ToolRuntime` |
+| `src/core/tools/*-tools.ts` (6 文件) + `define-tool.ts`/`siyuan-api.ts`/`index.ts` | — | 19 个工具，`defineTool(fn,{schema})` → `tool(...)` + `runtime.writer()` | `tool`, `ToolRuntime` |
 
 ### 目标
 
@@ -67,7 +97,7 @@
 + "ai": "^6.0.177",
 + "@ai-sdk/openai": "^3",            // OpenAI 原生（o系列 reasoningEffort）
 + "@ai-sdk/openai-compatible": "^2", // 自定义 baseURL 的 OpenAI 兼容端点
-+ "@ai-sdk/deepseek": "^1",          // deepseek-reasoner 原生 reasoning
++ "@ai-sdk/deepseek": "^2",          // deepseek-reasoner 原生 reasoning（克隆实测 2.0.34）
 + "@ai-sdk/mcp": "^1"                // ✅ v6 把 MCP client 从 ai 拆出到此包
 // zod ^4.3.6 保留（provider 均已验证带 (zod@4.3.6)）
 ```
@@ -131,13 +161,22 @@ export function createModel(config: ModelConfig, opts: CreateModelOptions = {}):
 - `dangerouslyAllowBrowser` 在 AI SDK 不需要——它本就为浏览器/edge 设计。
 - `temperature`、`reasoningEffort` 不再进 `modelKwargs`，改在调用处用 `providerOptions`（见 5.3）。
 
-### 5.2 思维链（删 340 行 hack）
+### 5.2 思维链（删 ~370 行 hack：`deepseek.ts` 222 + `reasoning.ts` 155）
+
+> **现状已变（2026-05-22 复核）**：`reasoning.ts` 已从最初的 50 行 `injectReasoningContent` 长成 155 行，含三块：
+> 1. `injectReasoningContent`——把上一轮 AI 的 `reasoning_content` 回填到下次请求的 assistant 消息（thinking 端点缺它会 400）。
+> 2. `patchReasoningRoundTrip`——**猴补丁 `ChatOpenAICompletions` 原型**（不是实例，因 `createAgent` 会 `bindTools` 重绑到新实例），拦截 `_convertCompletionsDelta*`/`_convertCompletionsMessage*` 抓流式与终态 reasoning，再在 `completionWithRetry` 注回。**两处调用**：`deepseek.ts:48` 与 `chat-model.ts:63`（即 OpenAI 兼容端点也吃这层）。
+> 3. 一段临时 debug 落盘块（`__rec`/`__flushReasoningDebug` 写 `sa-reasoning-debug.json`），注释明写「Remove once the 400 is resolved」。
+>
+> v6 把上述全部消化掉——**整个原型猴补丁 + 回填 + debug 块一起删**，这是迁移最大的净收益面之一，不只是删 `injectReasoningContent`。
 
 v6 把 reasoning 作为头等 part：
 
 - `@ai-sdk/deepseek` 的 `deepseek-reasoner` 直接产 `reasoning-start/delta/end`，**`ChatDeepSeek` 子类整文件删除**。
-- 历史消息回填：v6 把 reasoning 存进 `UIMessage` 的 `reasoning` part，`convertToModelMessages` 自动按 provider 规则带回上下文，**`injectReasoningContent` 删除**。
+- 历史消息回填：v6 把 reasoning 存进 `UIMessage` 的 `reasoning` part，`convertToModelMessages` 自动按 provider 规则带回上下文，**`injectReasoningContent` + `patchReasoningRoundTrip` 整体删除**（原型猴补丁不再需要）。
 - `<think>` 标签流：用 `extractReasoningMiddleware({tagName:"think"})`（见 5.1），替掉原 `_streamResponseChunks` 里的手工解析。
+- ⚠️ **`config.reasoningTag` 字段当前不存在**（5.1 代码假设了它）。需在 `ModelConfig`（`src/types/model-config.ts`）新增一个可选 `reasoningTag?: string`，UI（settings-view）侧暴露开关；或先用 `providerType` 推断（deepseek→native、其余兼容端点若已知吐 `<think>` 则置 tag）。列为 Wave 1 的一个子项。
+- `ModelProfile`/`DEEPSEEK_PROFILES` 仅 `deepseek.ts:211` 的 `profile` getter 引用——删 `deepseek.ts` 即可一并删；**唯一前置检查**：`compaction.ts` 的 token 估算若依赖 `maxInputTokens`，则把该表迁到一个独立常量文件保留。
 - `ReasoningEffort`（`off/low/high/xhigh/default`）→ `providerOptions`：
 
 ```ts
@@ -344,28 +383,38 @@ type AgentState = {
 
 ## 8. 实施计划（波次）
 
+> 已按 §0 的 B3 修正：`agent-types.ts` 别名重定义上提到 Wave 0；PoC 作为 Wave 0 的出口闸。
+
 ```
-Wave 0  依赖与脚手架
-  └─ 装 ai@6/@ai-sdk/*；删 langchain*；建 model.ts；打印一遍 fullStream part.type 核对 R1
+Wave 0  依赖 + 脚手架 + 别名 + PoC（串行闸，必须先过）
+  ├─ 装 ai@6/@ai-sdk/*(deepseek^2,mcp^1,openai^3,openai-compatible^2)；删 langchain*/langsmith
+  ├─ agent-types.ts：AgentModel=LanguageModel、AgentTool=Tool（from "ai"）  ← B3，解锁并行
+  ├─ webpack.config.js：复核移除 node:async_hooks external
+  └─ PoC：单轮文本 + 1 次工具调用 + 1 次 reasoning + 1 个 write_todos 自定义事件
+        打印 fullStream part.type 核对 §5.3；跑通才进 Wave 1
 
-Wave 1  无 UI 风险层（可并行）
-  ├─ model.ts（替 chat-model.ts）+ 删 llms/deepseek.ts、llms/reasoning.ts          # 5.1/5.2
-  └─ tools/*.ts 改 tool({inputSchema,execute}) + tool-context.ts + siyuan-api.ts   # 5.4
+Wave 1  无引擎依赖层（Wave 0 后可真并行——文件不相交）
+  ├─ 任务A 模型层：新建 model.ts（替 chat-model.ts）+ 删 llms/deepseek.ts、llms/reasoning.ts
+  │         B4 providerOptions 按 provider name 键；B5 R1 类强制走 @ai-sdk/deepseek      # 5.1/5.2
+  └─ 任务B 工具层：只重写 define-tool.ts（包 ai 的 tool()，experimental_context→ToolEmitContext）
+            sub-agent.ts 的 tool import 同换；6 个 *-tools.ts/siyuan-api.ts 基本不动        # 5.4
 
-Wave 2  引擎（依赖 Wave 1；单独做，最高风险）
-  └─ stream-runtime.ts 重写为 runAgentStream 消费 fullStream，保持 AgentStreamUiEvent  # 5.3
-     + agent.ts 瘦身 + compaction.ts/sub-agent.ts 换 generateText                      # 5.5/5.6/5.7
+Wave 2  引擎（依赖 Wave 1 全部；单独做，最高风险，串行）
+  └─ stream-runtime.ts 重写为 runAgentStream 消费 fullStream，保持 AgentStreamUiEvent     # 5.3
+     + agent.ts 瘦身 + compaction.ts(按 UIMessage[] 重写 split/turn)/sub-agent.ts 换 generateText  # 5.5/5.6/5.7
 
-Wave 3  外围
-  ├─ mcp-client.ts → experimental_createMCPClient（注意 transport）                    # 5.8
-  ├─ 持久化阶段 A：state.messages → UIMessage[]；session-store 弃旧会话                 # 6
-  └─ 追踪：移除 LangSmith（或接 OTel）                                                  # 5.9
+Wave 3  消息形状 + 外围（依赖 Wave 2）
+  ├─ message-shape.ts 重写/删除（B2，否则 §9 LangChain-import 闸不过）
+  ├─ 持久化阶段 A：state.messages → UIMessage[]；session-store 弃旧会话                    # 6
+  ├─ 历史回放：chat-panel.ts/chat-helpers.ts/core/ui-message-builder.ts 改读 UIMessage（B1）
+  ├─ mcp-client.ts → createMCPClient（注意 transport 浏览器约束）                          # 5.8
+  └─ 追踪：移除 LangSmith（或接 OTel）                                                    # 5.9
 
 Wave 4  可选收益
-  └─ 持久化阶段 B：ToolMessageUi 折叠进 UIMessage data-* parts                          # 6
+  └─ 持久化阶段 B：ToolMessageUi 折叠进 UIMessage data-* parts                            # 6
 ```
 
-关键路径：Wave 2 是单点高风险（流式行为回归）。建议先做一条「单轮文本 + 一次工具调用 + 一次 reasoning + 一个 `write_todos` 自定义事件」的最小贯通 PoC，跑通再铺开 19 个工具。
+关键路径：Wave 2 是单点高风险（流式行为回归）；Wave 3 含 B1/B2 的 UI 与 message-shape 改动（原计划误判为「不动」）。Wave 0 的 PoC 是放行闸——跑通再铺开 19 个工具与引擎重写。
 
 ---
 
@@ -381,8 +430,33 @@ Wave 4  可选收益
 
 ## 10. 附：受影响文件清单（实施核对用）
 
-**删除**：`src/llms/deepseek.ts`、`src/llms/reasoning.ts`（`injectReasoningContent`；`ModelProfile`/`DEEPSEEK_PROFILES` 若仍被引用则迁出保留）。
-**重写**：`agent.ts`、`stream-runtime.ts`、`chat-model.ts`→`model.ts`、`compaction.ts`、`sub-agent.ts`、`mcp-client.ts`、`tools/siyuan-api.ts`、`tools/*-tools.ts`(×6)、`tools/index.ts`。
-**调整**：`types/session.ts`(`AgentState.messages` 类型)、`types/tool-events.ts`(如做阶段 B)、`session-store.ts`(弃旧会话)、`webpack.config.js`(node external)、`package.json`。
-**大概率不动**：`ui/chat-panel.ts`、`ui/ui-message-builder.ts`、`ui/markdown.ts`、`ui/chat-helpers.ts`（靠 `AgentStreamUiEvent` 契约稳定）。
+> 已按 §0 B1/B2/B3 + 路径修正补全。
+
+**删除**：`src/llms/deepseek.ts`、`src/llms/reasoning.ts`（`injectReasoningContent` + `patchReasoningRoundTrip` 原型猴补丁 + 临时 debug 块全删；`ModelProfile`/`DEEPSEEK_PROFILES` 唯一消费者是 deepseek.ts，随删，无需迁表）。
+**重写**：`agent-types.ts`(别名重指 `ai`，**Wave 0**)、`agent.ts`、`stream-runtime.ts`、`chat-model.ts`→`model.ts`、`compaction.ts`(按 UIMessage[] 重写)、`sub-agent.ts`、`mcp-client.ts`、`core/message-shape.ts`(**B2，否则 §9 闸不过**)、`core/ui-message-builder.ts`(路径在 core/，全 LangChain 形状耦合)、`tools/define-tool.ts`(Wave 1 工具层真正工作量)。
+**调整**：`types/session.ts`(`AgentState.messages` 类型)、`types/model-config.ts`(新增 `reasoningTag?`、决定 effort 行为，§5.2)、`types/tool-events.ts`(`UiMessage` 形状/阶段 B)、`session-store.ts`(弃旧会话)、`ui/chat-panel.ts`+`ui/chat-helpers.ts`(**B1 历史回放读 UIMessage**)、`tools/siyuan-api.ts`+`tools/*-tools.ts`(×6)+`tools/index.ts`(随 define-tool 签名小调)、`webpack.config.js`(node external)、`package.json`。
+**大概率不动**：`ui/markdown.ts`，以及 UI 的**直播流**渲染路径（靠 `AgentStreamUiEvent` 契约稳定）——但 UI 的**历史回放**路径不在此列（见 B1）。
 ```
+
+---
+
+## 11. 第二跳：AI SDK v6 → v7（评估）
+
+> 用户最初的问题是「LangChain→v6 再 v6→v7」两步工作量。结论：**两步极不对称，别真分两次大动**。
+
+### 11.1 工作量对比
+
+| 跳 | 性质 | 估算 | 主导成本 |
+|---|---|---|---|
+| **LangChain → v6** | 换底座（本文档全部内容） | ~5–9 人日 | `stream-runtime.ts` 重写 + 思维链层删除 + 持久化清断 |
+| **v6 → v7** | 小版本升级 | **<1 人日** | 依赖 bump + provider 包微调 + 修 deprecation |
+
+### 11.2 v7 现状与判断（2026-05 核实）
+
+- v7 仍是 **canary / 预发布**（`npm install ai@canary`，tracking issue vercel/ai#14011，2026-04 开）。**不要让要发布的插件直接落 canary。**
+- Vercel 官方定调：v6→v7 升级摩擦「very little friction」——破坏性变更主要落在 **provider 实现包**（`@ai-sdk/openai`/`@ai-sdk/deepseek` 等的严格化），高层 API（`streamText`/`useChat`/Agent）靠 deprecation 平滑过渡。
+- v7 明确**不含** "app messages 持久化层"（被推迟到 v7 之后，依赖 prompt 框架与 token 计算）；包拆分（provider/core）、子 agent 独立流也都排在 **v7 稳定之后**。即：现在为了 v7 的持久化收益而抢跑，收益还拿不到。
+
+### 11.3 策略
+
+**一次迁到 v6 稳定线（`ai@6.0.177`，已 pin），v7 转正后当一次普通 minor bump 处理。** 本文档第 5–10 节即这一步的完整设计；v7 不需要单独的迁移设计文档，届时按官方 v6→v7 migration guide 走依赖升级即可。对本文档 §6 的持久化设计有一个顺带好处：统一到 `UIMessage[]` 后，v7/后续把 reasoning、structured output、多模态 part 作为**非破坏性 minor** 加入，无需再来一次大改。
