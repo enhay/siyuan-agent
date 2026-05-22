@@ -27,8 +27,21 @@
 
 .chat-panel__messages {
 	flex: 1;
+	/* Without min-height:0 a flex child floors at its content height, so a long
+	   conversation expands the column and pushes the composer off-screen instead
+	   of scrolling internally. This keeps the scroll inside __messages. */
+	min-height: 0;
 	overflow-y: auto;
 	padding: 14px 14px 20px;
+}
+
+/* Fixed chrome around the scroll area never shrinks — only __messages scrolls,
+   so the composer stays pinned to the bottom whether the chat is new or long. */
+.chat-panel__session-bar,
+.chat-panel__context-bar,
+.chat-panel__todos-dock,
+.chat-panel__bottom-bar {
+	flex-shrink: 0;
 }
 
 .chat-panel__chat-view,
