@@ -468,7 +468,7 @@ Wave 4  可选收益
 Waves 0–3 已落地：`src/` 无 LangChain import，生产构建绿，`npm test` 308 passed。安装 `ai@6.0.190`（与 pin 的 `6.0.177` 同 minor）。与 §5/§6 设计的关键偏差如下（实现以本节为准）：
 
 - **Wave 2/3 合并实现**：原计划 Wave 2（引擎）/Wave 3（持久化）分开，实测因消息形状与引擎耦合，合并为一组提交更干净。
-- **持久化分轨保留（未做 §6 的 UIMessage[] 统一）**：`state.messages` 改为 AI SDK **`ModelMessage[]`**（streamText 直接吃、turn 后 append `result.response.messages`）；`messagesUi` **保持 `lc:1` dict 形态**（plain JSON，非 LangChain 实例）。收益：**UI 渲染路径（直播 + 历史回放）零改动，B1 完全规避，旧会话仍能渲染**。代价：`messages`/`messagesUi` 双轨保留——§6 的「删双轨」降级为可选 Wave 4（已 DEFER，属低价值优化）。
+- **持久化（Wave 2/3 阶段）**：`state.messages` 改为 AI SDK **`ModelMessage[]`**（streamText 直接吃、turn 后 append `result.response.messages`）；当时 `messagesUi` 暂保持 `lc:1` dict 形态以零改 UI（规避 B1）。**此双轨已在 Wave 4 取消**（见下）。
 - **`message-shape.ts`**：删 `@langchain/*` 类与 `messageFromDict`/`messagesFromDict`；accessors 同时读 `lc:1` dict 与 `ModelMessage` parts；新增 `toModelMessages()`（入站 lc:1/简化 dict → ModelMessage，新会话直接 passthrough）。移除了对 live `_getType()` 实例的支持（不再产生实例）。
 - **`makeAgent` 不再返回 agent 对象**，返回 `AgentRuntime {model, system, tools(ToolSet), providerOptions}`；`runAgentStream` 内部调 `streamText` 并 `for await fullStream`。`agent-types.ts` 多导出 `AgentToolSet`，工具集经 `toolSetFromArray(__toolName)` 由数组转 record。
 - **工具自定义 UI 事件顺序修复（实现期发现的真 bug）**：`streamText` 会**急切执行** `execute()`，故工具 `emit` 可能早于消费方处理到 `tool-call` part → 事件 `toolCallIndex` 绑成 -1。修复：在 `runAgentStream` 缓冲早到的 emit，待 `tool_call_start` 注册后再 flush 绑定。详见 `stream-runtime.ts` 的 `pendingEmits`。
@@ -476,3 +476,13 @@ Waves 0–3 已落地：`src/` 无 LangChain import，生产构建绿，`npm tes
 - **MCP（§5.8）**：未改用 `@ai-sdk/mcp` 的 `createMCPClient`；`mcp-client.ts` 自带 JSON-RPC HTTP 传输，仅把工具包装从 LangChain `tool` 换成 `ai` 的 `tool()`+`__toolName`（函数名 `mcpToolsToLangChain` 暂留）。
 - **测试**：删 `chat-model`/`stream-parser`/`04-create-agent`（测已删内部）；其余按 `tool.execute()`/`__toolName`/`generateText`(MockLanguageModelV3) 重写；`stream-runtime.test` 改为经真实 `streamText` + mock model 驱动。
 - **Wave 0 PoC** 保留在 `_harness/poc-aisdk.test.ts`（throwaway，未纳入 vitest include）。
+
+### Wave 4 已落地（单轨收敛，用户确认不兼容旧会话后执行）
+
+§6 的「删双轨」已实现（不是 §6 阶段 B 的 AI SDK `UIMessage` data-* parts，而是更轻的等价做法）：
+
+- **单轨 = `state.messages`（`ModelMessage[]`）+ `state.toolUIEvents`（富工具卡片，按 toolCallId 配对渲染）。** 删除 `messagesUi` / `ToolMessageUi` / `isToolMessageUi` / `UiMessageBuilder`（整文件 `ui-message-builder.ts`）/ 全部 `lc:1` dict 构造。
+- 历史回放复用既有 `renderConversationMessages(messages, toolUIEvents)`（曾是 messagesUi 之前的渲染器，仍作 tasks-view 的 fallback 存在）；把 reasoning 回放并入它；新增 `messageToolResult()` 读 ModelMessage 的 tool-result part。
+- `stream-runtime` 不再构建并行 UI 轨（更简洁）；`chat-panel`/`task-run-group`/`tasks-view`/`scheduled-task-manager`/`chat-helpers` 全部切到单轨；删死代码 `normalizeMessagesForDisplay`/`cloneMessage`。`/compact` 不再插入 ToolMessageUi 通知卡（改为重渲染压缩后的 messages）。
+- **代价**：旧会话（含 `messagesUi`/`lc:1`）不再特殊渲染——`toModelMessages` 仍能把旧 `lc:1` messages 读成上下文，但 `messagesUi`-only 的旧记录会丢富卡片。用户已确认放弃旧会话兼容。
+- 验证：构建绿、`npm test` 308 passed、eslint 0 error。**未做 SiYuan 内手测**（同前，UI 回归需真机验证）。
