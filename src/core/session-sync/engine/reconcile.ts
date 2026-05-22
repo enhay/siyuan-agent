@@ -27,6 +27,9 @@ export interface ReconcileDeps {
 	/** When set with aiTitleEnabled, generate readable titles via the model registry. */
 	titleProvider?: TitleProvider;
 	aiTitleEnabled?: boolean;
+	/** Pause between upserts (ms) so a large backfill doesn't starve SiYuan's
+	 *  background indexing. 0/undefined for incremental syncs. */
+	upsertDelayMs?: number;
 }
 
 /** Title precedence: an existing AI title is sticky (never reverts on toggle-off);
@@ -216,6 +219,7 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 			result.errors.push(`failed to upsert ${file.path}: ${err}`);
 		}
 		if (++processed % 25 === 0) console.log(`[session-sync] ${processed}/${ordered.length} (new ${result.newSessions}, err ${result.errors.length})`);
+		if (deps.upsertDelayMs && processed < ordered.length) await new Promise((r) => setTimeout(r, deps.upsertDelayMs));
 	}
 
 	// 3. Nest children under their parent docs (idempotent via movedUnderParent).
