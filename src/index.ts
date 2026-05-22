@@ -126,14 +126,14 @@ export default class SiYuanAgent extends Plugin {
 					this.chatPanel = null;
 				}
 				this.dockElement = dock.element;
-				// Make the dock content a full-height flex column so the `.fn__flex-1`
-				// body actually fills (giving .chat-panel a definite height). Without
-				// this the flex chain has no height to distribute and the message area
-				// collapses to its content — pushing the composer up to the top.
+				// Make the dock content a flex column so the `.fn__flex-1` body fills
+				// SiYuan's already-definite dock height, giving .chat-panel(height:100%)
+				// a height to resolve against. (Don't force height:100% here — SiYuan
+				// sizes dock.element itself; overriding it can overshoot the visible
+				// area and clip the bottom of the scroll.)
 				const dockEl = dock.element as HTMLElement;
 				dockEl.style.display = "flex";
 				dockEl.style.flexDirection = "column";
-				dockEl.style.height = "100%";
 				dock.element.innerHTML = `<div class="toolbar toolbar--border toolbar--dark">
 					<svg class="toolbar__icon"><use xlink:href="#iconAgent"></use></svg>
 					<div class="toolbar__text">${DOCK_TITLE}</div>
