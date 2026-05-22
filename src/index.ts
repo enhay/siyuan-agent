@@ -35,6 +35,7 @@ export default class SiYuanAgent extends Plugin {
 	private dockElement: Element | null = null;
 	private dockWidthTimer: ReturnType<typeof setTimeout> | null = null;
 	private pendingContexts: string[] = [];
+	private pendingDoc: { id: string; title: string } | null = null;
 	private pendingView: "settings" | null = null;
 	private sessionStore: SessionStore;
 	private scheduledTaskManager: ScheduledTaskManager;
@@ -95,6 +96,12 @@ export default class SiYuanAgent extends Plugin {
 				});
 			}
 		});
+
+		// Live-track the user's focused document so the chat can attach it as
+		// ambient context (a reference, not its content).
+		this.eventBus.on("switch-protyle", (e) => this.trackActiveDoc(e.detail.protyle));
+		this.eventBus.on("loaded-protyle-static", (e) => this.trackActiveDoc(e.detail.protyle));
+		this.eventBus.on("loaded-protyle-dynamic", (e) => this.trackActiveDoc(e.detail.protyle));
 
 		// One dock for both desktop and mobile: a dedicated, resizable side panel
 		// that never mixes with document tabs. Initial width is restored from
@@ -229,7 +236,10 @@ export default class SiYuanAgent extends Plugin {
 		let titleProvider;
 		if (ss.aiTitle.enabled) {
 			try {
-				const model = createChatModel(resolveModelConfig(this.getConfig(), ss.aiTitle.modelId));
+				// reasoningEffort "off": a 16-char title needs no chain-of-thought, and
+				// leaving it on makes reasoning models (e.g. deepseek-v4) burn the token
+				// budget on reasoning_content → empty title → heuristic fallback.
+				const model = createChatModel(resolveModelConfig(this.getConfig(), ss.aiTitle.modelId), { reasoningEffort: "off" });
 				titleProvider = createTitleProvider(model as unknown as Parameters<typeof createTitleProvider>[0]);
 			} catch {
 				titleProvider = undefined; // model unavailable → heuristic titles
@@ -356,6 +366,17 @@ export default class SiYuanAgent extends Plugin {
 		}, 500);
 	}
 
+	/** Push the active editor's document to the chat as ambient context. */
+	private trackActiveDoc(protyle: any): void {
+		if (!protyle || this.getConfig().autoAttachCurrentDoc === false) return;
+		const id: string = protyle.block?.rootID || "";
+		if (!id) return;
+		const title: string = (protyle.title?.editElement?.textContent || "").trim();
+		const doc = { id, title };
+		if (this.chatPanel) this.chatPanel.setCurrentDoc(doc);
+		else this.pendingDoc = doc;
+	}
+
 	private sendContextToChat(text: string): void {
 		if (!text) {
 			return;
@@ -371,6 +392,10 @@ export default class SiYuanAgent extends Plugin {
 	private flushPendingContexts(): void {
 		if (!this.chatPanel) {
 			return;
+		}
+		if (this.pendingDoc) {
+			this.chatPanel.setCurrentDoc(this.pendingDoc);
+			this.pendingDoc = null;
 		}
 		if (this.pendingView === "settings") {
 			this.chatPanel.openSettingsView();

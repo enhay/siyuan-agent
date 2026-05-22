@@ -48,10 +48,14 @@ function extractResponseItemText(content: unknown): string {
 function isInjectedContextMessage(role: "user" | "assistant", text: string): boolean {
 	if (role !== "user") return false;
 	const normalized = text.trim();
-	return (
+	if (
 		normalized.startsWith("# AGENTS.md instructions for ") &&
 		(normalized.includes("<INSTRUCTIONS>") || normalized.includes("<environment_context>"))
-	);
+	)
+		return true;
+	// Codex control injections that aren't real user input (interrupt markers,
+	// standalone context blocks) — would otherwise leak into the doc title.
+	return /^<(turn_aborted|environment_context|user_instructions)\b/.test(normalized);
 }
 
 export function parseCodexSession(content: string, _sourcePath?: string): NormalizedSession {
