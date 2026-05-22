@@ -42,6 +42,9 @@ export function buildSyncRunner(
 		rootPath: config.rootPath,
 		titleProvider: aiTitleEnabled ? titleProvider : undefined,
 		aiTitleEnabled,
+		// Pace writes so a first-run backfill (hundreds of docs) doesn't flood
+		// SiYuan's FTS indexer; negligible for steady-state incremental syncs.
+		upsertDelayMs: 200,
 	};
 
 	return {

@@ -30,7 +30,14 @@ export interface ReconcileDeps {
 	/** Pause between upserts (ms) so a large backfill doesn't starve SiYuan's
 	 *  background indexing. 0/undefined for incremental syncs. */
 	upsertDelayMs?: number;
+	/** Defer writing a session until it's been idle this long (settle-gate). A live
+	 *  session's file grows every poll; without this it would be re-rendered and
+	 *  whole-doc-overwritten each tick (full FTS reindex). Writing only once it
+	 *  settles makes each session cost one write per idle period. 0 disables. */
+	settleMs?: number;
 }
+
+const DEFAULT_SETTLE_MS = 5 * 60 * 1000;
 
 /** Title precedence: an existing AI title is sticky (never reverts on toggle-off);
  *  otherwise generate once when AI is enabled, falling back to the heuristic. */
@@ -239,8 +246,21 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 	};
 	const ordered = [...entries].sort((a, b) => depthOf(sessionKey(b.session)) - depthOf(sessionKey(a.session)));
 	if (ordered.length > 0) console.log(`[session-sync] processing ${ordered.length} changed sessions…`);
+	// Settle-gate: skip sessions still being actively written; they get written
+	// once they go idle. We deliberately do NOT refresh their cursor, so the next
+	// tick re-evaluates them as the clock advances past the settle window (even if
+	// the file stops changing). A re-activated session re-enters here and defers
+	// again until it re-settles, then overwrites its existing doc (same docId).
+	const settleMs = deps.settleMs ?? DEFAULT_SETTLE_MS;
+	const nowTs = deps.now ? deps.now() : Date.now();
 	let processed = 0;
+	let deferred = 0;
 	for (const { file, session } of ordered) {
+		const updated = Date.parse(session.updatedAt);
+		if (settleMs > 0 && !Number.isNaN(updated) && nowTs - updated < settleMs) {
+			deferred++;
+			continue;
+		}
 		try {
 			const childLinks = collectChildLinks(state, session.source, session.sessionId);
 			if (session.isSubAgent) {
@@ -255,6 +275,7 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 		if (deps.upsertDelayMs && processed < ordered.length) await new Promise((r) => setTimeout(r, deps.upsertDelayMs));
 	}
 
+	if (deferred > 0) console.log(`[session-sync] deferred ${deferred} still-active session(s) (settle <${Math.round(settleMs / 60000)}min)`);
 	state.lastSyncAt = deps.now ? deps.now() : Date.now();
 	await deps.state.save(state);
 	return result;

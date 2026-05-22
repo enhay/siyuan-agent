@@ -143,6 +143,39 @@ describe("reconcileOnce", () => {
 		expect(writer.calls.overwrite).toBe(1);
 	});
 
+	it("settle-gate: defers a still-active session, writes once it goes idle", async () => {
+		const writer = new FakeWriter();
+		const state = memState();
+		// codexContent's last activity is 2026-05-01T10:00:05Z.
+		const mk = () => deps(fileSource([{ file: { source: "codex" as const, path: "/a/c1.jsonl", sizeBytes: 100, mtimeMs: 1000 }, content: codexContent("c1") }]), writer, state);
+		// 2 min after last activity → still active → deferred (nothing written).
+		const r1 = await reconcileOnce({ ...mk(), now: () => Date.parse("2026-05-01T10:02:00Z"), settleMs: 5 * 60 * 1000 });
+		expect(r1.updatedSessions).toBe(0);
+		expect(writer.calls.create).toBe(0);
+		// 10 min after → settled → written exactly once.
+		const r2 = await reconcileOnce({ ...mk(), now: () => Date.parse("2026-05-01T10:10:00Z"), settleMs: 5 * 60 * 1000 });
+		expect(r2.newSessions).toBe(1);
+		expect(writer.calls.create).toBe(1);
+	});
+
+	it("settle-gate: a re-activated session re-defers, then overwrites the same doc once re-settled", async () => {
+		const writer = new FakeWriter();
+		const state = memState();
+		const at = (size: number, content: string) => fileSource([{ file: { source: "codex" as const, path: "/a/c1.jsonl", sizeBytes: size, mtimeMs: size }, content }]);
+		// 1) settled → written once.
+		await reconcileOnce({ ...deps(at(100, codexContent("c1")), writer, state), now: () => Date.parse("2026-05-01T10:10:00Z"), settleMs: 5 * 60 * 1000 });
+		expect(writer.calls.create).toBe(1);
+		// 2) re-activated: file grows, last activity recent → deferred (no overwrite).
+		const resumed = codexContent("c1", [{ timestamp: "2026-05-01T11:00:00Z", type: "event_msg", payload: { type: "agent_message", message: "more" } }]);
+		await reconcileOnce({ ...deps(at(300, resumed), writer, state), now: () => Date.parse("2026-05-01T11:02:00Z"), settleMs: 5 * 60 * 1000 });
+		expect(writer.calls.create).toBe(1); // still one doc
+		expect(writer.calls.overwrite).toBe(0); // deferred
+		// 3) re-settled → same doc overwritten once (no duplicate).
+		await reconcileOnce({ ...deps(at(300, resumed), writer, state), now: () => Date.parse("2026-05-01T11:10:00Z"), settleMs: 5 * 60 * 1000 });
+		expect(writer.calls.create).toBe(1);
+		expect(writer.calls.overwrite).toBe(1);
+	});
+
 	it("recreates when the stored doc was deleted and no recovery match exists", async () => {
 		const writer = new FakeWriter();
 		const state = memState({ files: {}, sessions: { "codex:c1": { target: "siyuan", docId: "gone", contentHash: "sha256:x", sessionId: "c1", source: "codex" } } });
