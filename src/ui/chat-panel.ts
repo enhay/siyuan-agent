@@ -88,6 +88,8 @@ export class ChatPanel implements ChatPanelHost {
 	private composerMode: "chat" | "automation" = "chat";
 	private automationForm: PresetForm = { preset: "daily", time: DEFAULT_TIME, weekday: 1, cron: "", triggerAt: undefined };
 	private pendingContext: string | null = null;
+	private currentDoc: { id: string; title: string } | null = null;
+	private autoDocSessionOff = false;
 	private abortCtrl: AbortController | null = null;
 	private pendingEl: HTMLElement | null = null;
 	private autoScroll = true;
@@ -790,6 +792,7 @@ export class ChatPanel implements ChatPanelHost {
 	}
 
 	private async newSession(): Promise<void> {
+		this.autoDocSessionOff = false;
 		const msgs = this.activeSession.state?.messages;
 		if (!msgs || msgs.length === 0) {
 			this.textareaEl.focus();
@@ -961,6 +964,17 @@ export class ChatPanel implements ChatPanelHost {
 				extra ? this.t("chat.init.extra", { extra }) : "",
 				this.t("chat.init.start"),
 			].filter(Boolean).join("\n\n");
+		}
+
+		/* Ambient context: tell the agent which document the user is viewing (a
+		 * reference, not its content) via the system prompt, so the visible
+		 * message stays clean. The agent reads it with get_document if relevant. */
+		if (this.currentDoc && !this.autoDocSessionOff) {
+			const docNote = this.t("chat.currentDoc.systemNote", {
+				title: this.currentDoc.title || this.t("chat.currentDoc.untitled"),
+				id: this.currentDoc.id,
+			});
+			extraSystemPrompt = extraSystemPrompt ? `${extraSystemPrompt}\n\n${docNote}` : docNote;
 		}
 
 		/* Build user message content with optional context */
@@ -1361,25 +1375,67 @@ export class ChatPanel implements ChatPanelHost {
 
 	addContext(text: string): void {
 		this.pendingContext = text;
-		this.contextBar.classList.remove("fn__none");
-		this.contextBar.innerHTML = `
-<div class="chat-panel__context">
-	<span class="chat-panel__context-label">📎 ${escapeHtml(this.t("chat.context.reference"))}</span>
-	<span class="chat-panel__context-text">${escapeHtml(text.length > 100 ? text.slice(0, 100) + "..." : text)}</span>
-	<span class="chat-panel__context-close block__icon b3-tooltips b3-tooltips__sw" aria-label="${escapeHtml(this.t("chat.context.remove"))}">
-		<svg><use xlink:href="#iconClose"></use></svg>
-	</span>
-</div>`;
-		this.contextBar.querySelector(".chat-panel__context-close").addEventListener("click", () => {
-			this.clearContext();
-		});
+		this.renderContextBar();
 		this.textareaEl.focus();
 	}
 
 	private clearContext(): void {
 		this.pendingContext = null;
-		this.contextBar.classList.add("fn__none");
-		this.contextBar.innerHTML = "";
+		this.renderContextBar();
+	}
+
+	/** Auto-attach the user's focused document as an ambient, removable reference. */
+	setCurrentDoc(doc: { id: string; title: string } | null): void {
+		this.currentDoc = doc;
+		this.renderContextBar();
+	}
+
+	private contextChip(opts: { variant?: "doc"; icon: string; label: string; text: string; role: string; remove: string }): string {
+		return `
+<div class="chat-panel__context${opts.variant === "doc" ? " chat-panel__context--doc" : ""}">
+	<span class="chat-panel__context-label">${opts.icon} ${escapeHtml(opts.label)}</span>
+	<span class="chat-panel__context-text">${escapeHtml(opts.text)}</span>
+	<span class="chat-panel__context-close block__icon b3-tooltips b3-tooltips__sw" data-role="${opts.role}" role="button" tabindex="0" aria-label="${escapeHtml(opts.remove)}">
+		<svg><use xlink:href="#iconClose"></use></svg>
+	</span>
+</div>`;
+	}
+
+	private renderContextBar(): void {
+		const chips: string[] = [];
+		if (this.currentDoc && !this.autoDocSessionOff) {
+			chips.push(this.contextChip({
+				variant: "doc",
+				icon: "📄",
+				label: this.t("chat.currentDoc.label"),
+				text: this.currentDoc.title || this.t("chat.currentDoc.untitled"),
+				role: "doc-close",
+				remove: this.t("chat.currentDoc.remove"),
+			}));
+		}
+		if (this.pendingContext) {
+			chips.push(this.contextChip({
+				icon: "📎",
+				label: this.t("chat.context.reference"),
+				text: this.pendingContext.length > 100 ? this.pendingContext.slice(0, 100) + "..." : this.pendingContext,
+				role: "text-close",
+				remove: this.t("chat.context.remove"),
+			}));
+		}
+		if (!chips.length) {
+			this.contextBar.classList.add("fn__none");
+			this.contextBar.innerHTML = "";
+			return;
+		}
+		this.contextBar.classList.remove("fn__none");
+		this.contextBar.innerHTML = chips.join("");
+		this.contextBar.querySelector("[data-role='doc-close']")?.addEventListener("click", () => {
+			this.autoDocSessionOff = true;
+			this.renderContextBar();
+		});
+		this.contextBar.querySelector("[data-role='text-close']")?.addEventListener("click", () => {
+			this.clearContext();
+		});
 	}
 
 	stop(): void {

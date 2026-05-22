@@ -3,6 +3,9 @@
 	padding: 6px 12px;
 	border-bottom: 1px solid var(--agent-border, var(--b3-border-color));
 	background: transparent;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
 }
 
 .chat-panel__context {
@@ -33,6 +36,13 @@
 .chat-panel__context-close {
 	cursor: pointer;
 	flex-shrink: 0;
+}
+
+/* Ambient "current document" chip — quieter than an explicit attachment. */
+.chat-panel__context--doc {
+	background: transparent;
+	border-style: dashed;
+	opacity: 0.82;
 }
 
 .chat-panel__settings-view {

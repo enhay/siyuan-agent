@@ -66,6 +66,8 @@ export interface AgentConfig {
 	panelPosition?: "right" | "bottom";
 	/** Persisted Agent dock width in px; restored as the dock's initial size. */
 	dockWidth?: number;
+	/** Auto-attach the user's focused document as ambient chat context. Default on. */
+	autoAttachCurrentDoc?: boolean;
 	guideDoc?: { id: string; title: string } | null;
 	defaultNotebook?: { id: string; name: string } | null;
 	langSmithEnabled?: boolean;
@@ -96,6 +98,7 @@ export const DEFAULT_CONFIG: AgentConfig = {
 	customInstructions: "",
 	panelPosition: "right",
 	dockWidth: 360,
+	autoAttachCurrentDoc: true,
 	guideDoc: null,
 	langSmithEnabled: false,
 	langSmithApiKey: "",
