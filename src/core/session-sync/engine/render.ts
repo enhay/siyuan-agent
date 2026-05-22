@@ -24,8 +24,10 @@ export function cleanMessageText(raw: string): string {
 	return raw
 		.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "")
 		.replace(/<environment_details>[\s\S]*?<\/environment_details>/gi, "")
-		.replace(/<local-command-(?:stdout|stderr)>[\s\S]*?<\/local-command-(?:stdout|stderr)>/gi, "")
-		.replace(/<command-(?:name|message|args)>[\s\S]*?<\/command-(?:name|message|args)>/gi, "")
+		// All <local-command-*> and <command-*> wrappers (stdout/stderr/caveat,
+		// name/message/args, …) — backreference keeps open/close tags paired.
+		.replace(/<local-command-([a-z-]+)>[\s\S]*?<\/local-command-\1>/gi, "")
+		.replace(/<command-([a-z-]+)>[\s\S]*?<\/command-\1>/gi, "")
 		.replace(/^Caveat:.*$/gim, "")
 		.replace(/\n{3,}/g, "\n\n")
 		.trim();
