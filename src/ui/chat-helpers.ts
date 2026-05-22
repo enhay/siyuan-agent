@@ -24,7 +24,7 @@ export interface ActivityBlockRefs {
 	archiveListEl: HTMLElement;
 }
 
-export type SettingsSection = "general" | "model-services" | "default-models" | "mcp" | "tracing" | "session-sync";
+export type SettingsSection = "general" | "model-services" | "default-models" | "mcp" | "session-sync";
 
 export interface ComposerKeyEvent {
 	key: string;
@@ -37,10 +37,6 @@ export interface SettingsDraft {
 	customInstructions: string;
 	guideDoc: { id: string; title: string } | null;
 	defaultNotebook: { id: string; name: string } | null;
-	langSmithEnabled: boolean;
-	langSmithApiKey: string;
-	langSmithEndpoint: string;
-	langSmithProject: string;
 	modelServices: ModelServiceConfig[];
 	defaultModelId: string;
 	subAgentModelId: string;

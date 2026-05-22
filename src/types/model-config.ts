@@ -76,10 +76,6 @@ export interface AgentConfig {
 	autoAttachCurrentDoc?: boolean;
 	guideDoc?: { id: string; title: string } | null;
 	defaultNotebook?: { id: string; name: string } | null;
-	langSmithEnabled?: boolean;
-	langSmithApiKey?: string;
-	langSmithEndpoint?: string;
-	langSmithProject?: string;
 	/** Model services grouped by provider / endpoint */
 	modelServices?: ModelServiceConfig[];
 	/** Multi-model registry */
@@ -106,10 +102,6 @@ export const DEFAULT_CONFIG: AgentConfig = {
 	dockWidth: 360,
 	autoAttachCurrentDoc: true,
 	guideDoc: null,
-	langSmithEnabled: false,
-	langSmithApiKey: "",
-	langSmithEndpoint: "https://api.smith.langchain.com",
-	langSmithProject: "SiYuan-Agent",
 	modelServices: [],
 	models: [],
 	defaultModelId: "",
