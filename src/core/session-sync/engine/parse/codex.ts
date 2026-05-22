@@ -5,7 +5,6 @@
  *  The disk read lives in the FileSource adapter. */
 
 import type { ConversationMessage, NormalizedSession, ToolActivity } from "../types";
-import { classifyIsSubAgent } from "../identity";
 
 interface RawRecord {
 	timestamp: string;
@@ -73,6 +72,7 @@ export function parseCodexSession(content: string, _sourcePath?: string): Normal
 	let model: string | undefined;
 	let agentNickname: string | undefined;
 	let agentRole: string | undefined;
+	let isSubAgentMarker = false;
 	let createdAt = "";
 	let updatedAt = "";
 
@@ -89,8 +89,13 @@ export function parseCodexSession(content: string, _sourcePath?: string): Normal
 				sessionId = (rec.payload.id as string) ?? sessionId;
 				cwd = (rec.payload.cwd as string) ?? cwd;
 				model = (rec.payload.model as string) ?? model;
+				// `source` is codex's authoritative marker: a string ("cli"/"vscode"/…)
+				// for a user-started MAIN session, or an object with `subagent` for a
+				// spawned sub-agent. Classify on that, not on agent_role (redundant +
+				// would misfire if a future main carried a role).
 				if (typeof rec.payload.source === "object" && rec.payload.source !== null) {
 					const sourceMeta = rec.payload.source as SessionMetaSource;
+					if (sourceMeta.subagent) isSubAgentMarker = true;
 					parentSessionId =
 						sourceMeta.subagent?.thread_spawn?.parent_thread_id ?? parentSessionId;
 				}
@@ -164,7 +169,7 @@ export function parseCodexSession(content: string, _sourcePath?: string): Normal
 		source: "codex",
 		sessionId,
 		parentSessionId,
-		isSubAgent: classifyIsSubAgent({ agentRole, parentSessionId }),
+		isSubAgent: isSubAgentMarker,
 		createdAt,
 		updatedAt,
 		cwd,

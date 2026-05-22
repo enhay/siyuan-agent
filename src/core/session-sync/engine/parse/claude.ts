@@ -10,7 +10,6 @@
  *    and set `parentSessionId` from the `sessionId` field (dir name as fallback). */
 
 import type { ConversationMessage, NormalizedSession, ToolActivity } from "../types";
-import { classifyIsSubAgent } from "../identity";
 
 interface ClaudeRecord {
 	type: string;
@@ -233,7 +232,9 @@ export function parseClaudeSession(content: string, sourcePath?: string): Normal
 		source: "claude",
 		sessionId,
 		parentSessionId,
-		isSubAgent: classifyIsSubAgent({ parentSessionId }) || isSidechain,
+		// Sidechain is Claude's authoritative sub-agent marker (file lives in a
+		// subagents/ dir with isSidechain + agentId).
+		isSubAgent: isSidechain,
 		agentId: isSidechain ? agentId : undefined,
 		createdAt,
 		updatedAt,

@@ -1,10 +1,10 @@
 /** Stable identity, paths, titles, and hashing for sessions.
  *
- *  Ported from `ailogger` (`src/siyuan/identity.ts`) with two changes:
- *  - `contentHash` uses Web Crypto (`crypto.subtle`) instead of `node:crypto`,
- *    keeping the `sha256:` form so plugin and CLI hashes stay comparable.
- *  - `classifyIsSubAgent` fixes ailogger's `!agentRole`-only split (plan B3):
- *    a session is a sub-agent when it has a role OR a parent. */
+ *  Ported from `ailogger` (`src/siyuan/identity.ts`); `contentHash` uses Web
+ *  Crypto (`crypto.subtle`) instead of `node:crypto`, keeping the `sha256:` form
+ *  so plugin and CLI hashes stay comparable. (Sub-agent classification lives in
+ *  the parsers, using each tool's authoritative marker: codex `source.subagent`,
+ *  claude `isSidechain`.) */
 
 import type { NormalizedSession, SessionSource } from "./types";
 
@@ -46,15 +46,6 @@ export function shortSessionId(sessionId: string): string {
  *  putFile) — no orphaned assets, parent links stay valid. */
 export function assetRelPath(session: Pick<NormalizedSession, "source" | "sessionId">): string {
 	return `session-sync/${session.source}-${slugify(session.sessionId) || "session"}.md`;
-}
-
-/** A session is a sub-agent if it carries a role OR a parent pointer. ailogger
- *  classified on role alone, which misfiles Codex sub-agents whose `agent_role`
- *  is null but which have a `parent_thread_id` (plan B3). */
-export function classifyIsSubAgent(
-	session: Pick<NormalizedSession, "agentRole" | "parentSessionId">,
-): boolean {
-	return !!session.agentRole || !!session.parentSessionId;
 }
 
 /** Stable HPath that does NOT depend on a dynamic/AI title (the readable title

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
 	buildSiyuanDocPath,
-	classifyIsSubAgent,
 	contentHash,
 	fileKey,
 	inferTitle,
@@ -25,15 +24,6 @@ function makeSession(over: Partial<NormalizedSession> = {}): NormalizedSession {
 		...over,
 	};
 }
-
-describe("classifyIsSubAgent", () => {
-	it("true when role set", () => expect(classifyIsSubAgent({ agentRole: "worker" })).toBe(true));
-	it("true when parent set (B3 role-null case)", () =>
-		expect(classifyIsSubAgent({ parentSessionId: "p1" })).toBe(true));
-	it("true when both set", () =>
-		expect(classifyIsSubAgent({ agentRole: "explorer", parentSessionId: "p1" })).toBe(true));
-	it("false when neither", () => expect(classifyIsSubAgent({})).toBe(false));
-});
 
 describe("identity helpers", () => {
 	it("sessionKey / fileKey", () => {
