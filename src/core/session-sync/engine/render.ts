@@ -24,6 +24,8 @@ export function cleanMessageText(raw: string): string {
 	return raw
 		.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "")
 		.replace(/<environment_details>[\s\S]*?<\/environment_details>/gi, "")
+		// Harness-injected background-task completion blocks (not user input).
+		.replace(/<task-notification>[\s\S]*?<\/task-notification>/gi, "")
 		// All <local-command-*> and <command-*> wrappers (stdout/stderr/caveat,
 		// name/message/args, …) — backreference keeps open/close tags paired.
 		.replace(/<local-command-([a-z-]+)>[\s\S]*?<\/local-command-\1>/gi, "")
