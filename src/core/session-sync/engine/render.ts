@@ -125,7 +125,10 @@ export function renderSession(session: NormalizedSession, options: RenderOptions
 	// ── 🎯 结论 (TL;DR) — a muted callout (blockquote), not a heading, to keep it
 	//    visually light: it's a heuristic 问/答 teaser (答 = the last assistant turn),
 	//    not an authoritative summary.
-	const firstUser = turns.find((m) => m.role === "user");
+	// Mirror the title's basis: the first *substantive* user turn (skip throwaway
+	// openers like "hi"), falling back to the first user turn if none qualifies.
+	const firstUser =
+		turns.find((m) => m.role === "user" && m.text.trim().length >= 3) ?? turns.find((m) => m.role === "user");
 	const lastAssistant = [...turns].reverse().find((m) => m.role === "assistant");
 	if (firstUser || lastAssistant || failed.length > 0) {
 		const parts: string[] = [];
