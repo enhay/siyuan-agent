@@ -24,7 +24,8 @@ export function createTitleProvider(model: InvokableModel): TitleProvider {
 			const seed = (firstUserMessage ?? title).replace(/\s+/g, " ").trim().slice(0, 600);
 			if (!seed) return undefined;
 			const prompt =
-				"用不超过 16 个字、概括这次 AI 编码会话主题，作为文档标题。只输出标题本身，不要引号或句末标点。\n\n会话首条消息：\n" +
+				"为下面这段编程对话起一个简短中文标题（不超过 16 字），直接概括任务或主题。" +
+				"只输出标题本身：不要引号或标点，不要出现“会话”“主题”“AI”“编码”等字样。\n\n首条消息：\n" +
 				seed;
 			const res = await model.invoke([{ role: "user", content: prompt }]);
 			const text = extractText(res.content)
