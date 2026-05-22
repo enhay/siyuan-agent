@@ -41,6 +41,13 @@ export function shortSessionId(sessionId: string): string {
 	return slug.length <= 12 ? slug : slug.slice(0, 12);
 }
 
+/** Deterministic asset path for a sub-agent's `.md` attachment (relative to the
+ *  workspace assets dir). Deterministic so re-rendering overwrites in place (via
+ *  putFile) — no orphaned assets, parent links stay valid. */
+export function assetRelPath(session: Pick<NormalizedSession, "source" | "sessionId">): string {
+	return `session-sync/${session.source}-${slugify(session.sessionId) || "session"}.md`;
+}
+
 /** A session is a sub-agent if it carries a role OR a parent pointer. ailogger
  *  classified on role alone, which misfiles Codex sub-agents whose `agent_role`
  *  is null but which have a `parent_thread_id` (plan B3). */

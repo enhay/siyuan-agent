@@ -10,6 +10,7 @@ import { createGetDocumentTool, createGetDocumentBlocksTool, createGetDocumentOu
 import { createEditBlocksTool, createAppendBlockTool, createCreateDocumentTool, createMoveDocumentTool, createRenameDocumentTool, createDeleteDocumentTool } from "./edit-tools";
 import { writeTodosTool } from "./plan-tools";
 import { createScheduledTaskTools } from "./scheduled-tools";
+import { createReadAttachmentTool } from "./attachment-tools";
 
 export { createDeleteDocumentTool } from "./edit-tools";
 export { siyuanFetch, emitToolEvent, emitActivity } from "./siyuan-api";
@@ -73,6 +74,7 @@ export function getDefaultTools(
 		createGetDocumentBlocksTool(i18n),
 		createGetDocumentOutlineTool(i18n),
 		createReadBlockTool(i18n),
+		createReadAttachmentTool(i18n),
 		createSearchFulltextTool(i18n),
 		createExploreNotesTool(getAgentConfig, i18n),
 		createAppendBlockTool(i18n),

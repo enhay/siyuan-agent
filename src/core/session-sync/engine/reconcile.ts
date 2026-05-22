@@ -13,9 +13,9 @@ import type { NormalizedSession, ReconcileResult, SessionRecord, SyncState } fro
 import { parseCodexSession } from "./parse/codex";
 import { parseClaudeSession } from "./parse/claude";
 import { renderSession, FOLDABLE_HEADING_PREFIXES } from "./render";
-import { buildSiyuanAttrs, buildSiyuanDocPath, contentHash, fileKey, inferTitle, sessionKey } from "./identity";
+import { assetRelPath, buildSiyuanAttrs, buildSiyuanDocPath, contentHash, fileKey, inferTitle, sessionKey } from "./identity";
 import { inferStatus } from "./status";
-import { collectChildLinks, pendingChildMoves, pendingBacklinks, type ChildLink } from "./aggregate";
+import { collectChildLinks, type ChildLink } from "./aggregate";
 
 export interface ReconcileDeps {
 	files: FileSource;
@@ -59,7 +59,7 @@ function parseFile(file: DiscoveredFile, content: string): NormalizedSession {
 
 function toRecord(
 	session: NormalizedSession,
-	docId: string,
+	ref: { docId?: string; assetPath?: string },
 	path: string,
 	hash: string,
 	title: string,
@@ -69,7 +69,8 @@ function toRecord(
 ): SessionRecord {
 	return {
 		target: "siyuan",
-		docId,
+		docId: ref.docId,
+		assetPath: ref.assetPath,
 		path,
 		title,
 		titleSource,
@@ -92,13 +93,14 @@ function toRecord(
 	};
 }
 
-async function upsert(
+/** Main session → a SiYuan document (full content, indexed, agent+human readable). */
+async function upsertDoc(
 	deps: ReconcileDeps,
 	state: SyncState,
 	session: NormalizedSession,
 	file: DiscoveredFile,
 	result: ReconcileResult,
-	childLinks: ChildLink[] = [],
+	childLinks: ChildLink[],
 ): Promise<void> {
 	const key = sessionKey(session);
 	const stateKey = fileKey(file.source, file.path);
@@ -113,7 +115,6 @@ async function upsert(
 		state.files[stateKey] = { offset: file.sizeBytes ?? 0, mtimeMs: file.mtimeMs, sessionKey: key };
 	};
 
-	// Content unchanged → only advance the file cursor, no kernel writes.
 	if (existing?.docId && existing.contentHash === hash && (await deps.writer.docExists(existing.docId))) {
 		refreshCursor();
 		return;
@@ -127,27 +128,53 @@ async function upsert(
 	if (docId) {
 		await deps.writer.overwriteDoc({ docId, markdown });
 	} else {
-		const created = await deps.writer.createDoc({
-			notebook: deps.notebookId,
-			path: buildSiyuanDocPath(deps.rootPath, session),
-			markdown,
-		});
+		const created = await deps.writer.createDoc({ notebook: deps.notebookId, path: buildSiyuanDocPath(deps.rootPath, session), markdown });
 		docId = created.id;
 		isNew = true;
 	}
 
-	// Always set the readable title on a fresh doc (its file-tree name is the slug
-	// path leaf until renamed); otherwise only when it actually changed (anti-churn).
 	if (isNew || title !== existing?.title) await deps.writer.renameDoc({ docId, title });
 	await deps.writer.setAttrs({ docId, attrs: buildSiyuanAttrs(session, { hash, title, titleSource, status }) });
-	// Collapse tool/warning sections by default (heading fold attr).
 	await deps.writer.foldHeadings({ docId, headingPrefixes: FOLDABLE_HEADING_PREFIXES });
 
-	const record = toRecord(session, docId, buildSiyuanDocPath(deps.rootPath, session), hash, title, titleSource, file.sizeBytes, now);
-	record.movedUnderParent = existing?.movedUnderParent; // preserve aggregation flag
-	state.sessions[key] = record;
+	state.sessions[key] = toRecord(session, { docId }, buildSiyuanDocPath(deps.rootPath, session), hash, title, titleSource, file.sizeBytes, now);
 	refreshCursor();
 	if (isNew) result.newSessions++;
+	result.updatedSessions++;
+}
+
+/** Sub-agent session → a `.md` attachment under data/assets/ (not a document, not
+ *  indexed). The parent links to it inline. Deterministic path → overwrite in place. */
+async function upsertAttachment(
+	deps: ReconcileDeps,
+	state: SyncState,
+	session: NormalizedSession,
+	file: DiscoveredFile,
+	result: ReconcileResult,
+	childLinks: ChildLink[],
+): Promise<void> {
+	const key = sessionKey(session);
+	const stateKey = fileKey(file.source, file.path);
+	const existing = state.sessions[key];
+	const now = deps.now ? deps.now() : Date.now();
+	const status = inferStatus(session, now);
+	const { title, titleSource } = await resolveTitle(deps, session, existing);
+	const markdown = renderSession(session, { title, status, subAgents: childLinks.length > 0 ? childLinks : undefined });
+	const hash = await contentHash(markdown);
+
+	const refreshCursor = () => {
+		state.files[stateKey] = { offset: file.sizeBytes ?? 0, mtimeMs: file.mtimeMs, sessionKey: key };
+	};
+
+	if (existing?.assetPath && existing.contentHash === hash) {
+		refreshCursor();
+		return;
+	}
+
+	const assetPath = await deps.writer.putAsset({ relPath: assetRelPath(session), content: markdown });
+	state.sessions[key] = toRecord(session, { assetPath }, assetPath, hash, title, titleSource, file.sizeBytes, now);
+	refreshCursor();
+	if (!existing) result.newSessions++;
 	result.updatedSessions++;
 }
 
@@ -177,7 +204,7 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 			file.mtimeMs !== undefined &&
 			cursor.offset === file.sizeBytes &&
 			cursor.mtimeMs === file.mtimeMs &&
-			cached?.docId
+			(cached?.docId || cached?.assetPath)
 		) {
 			continue;
 		}
@@ -214,34 +241,17 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 	let processed = 0;
 	for (const { file, session } of ordered) {
 		try {
-			await upsert(deps, state, session, file, result, collectChildLinks(state, session.source, session.sessionId));
+			const childLinks = collectChildLinks(state, session.source, session.sessionId);
+			if (session.isSubAgent) {
+				await upsertAttachment(deps, state, session, file, result, childLinks);
+			} else {
+				await upsertDoc(deps, state, session, file, result, childLinks);
+			}
 		} catch (err) {
 			result.errors.push(`failed to upsert ${file.path}: ${err}`);
 		}
 		if (++processed % 25 === 0) console.log(`[session-sync] ${processed}/${ordered.length} (new ${result.newSessions}, err ${result.errors.length})`);
 		if (deps.upsertDelayMs && processed < ordered.length) await new Promise((r) => setTimeout(r, deps.upsertDelayMs));
-	}
-
-	// 3. Nest children under their parent docs (idempotent via movedUnderParent).
-	for (const move of pendingChildMoves(state)) {
-		try {
-			await deps.writer.moveUnder({ childIds: [move.childDocId], parentDocId: move.parentDocId });
-			const rec = state.sessions[move.childSessionKey];
-			if (rec) rec.movedUnderParent = move.parentDocId;
-		} catch (err) {
-			result.errors.push(`failed to nest ${move.childSessionKey}: ${err}`);
-		}
-	}
-
-	// 4. Back-link each child to its parent doc (idempotent via backLinkedTo).
-	for (const link of pendingBacklinks(state)) {
-		try {
-			await deps.writer.prependBacklink({ childDocId: link.childDocId, parentDocId: link.parentDocId, parentTitle: link.parentTitle });
-			const rec = state.sessions[link.childSessionKey];
-			if (rec) rec.backLinkedTo = link.parentDocId;
-		} catch (err) {
-			result.errors.push(`failed to back-link ${link.childSessionKey}: ${err}`);
-		}
 	}
 
 	state.lastSyncAt = deps.now ? deps.now() : Date.now();

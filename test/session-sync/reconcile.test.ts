@@ -46,7 +46,7 @@ class FakeWriter implements SiyuanWriter {
 		this.calls.move++;
 	}
 	async foldHeadings() {}
-	async prependBacklink() {}
+	async putAsset() { return "assets/x.md"; }
 	async findDocBySessionKey(key: string) {
 		const id = this.byKey.get(key);
 		return id && this.docs.get(id)?.exists ? id : undefined;

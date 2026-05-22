@@ -40,11 +40,11 @@ export interface SiyuanWriter {
 	overwriteDoc(input: { docId: string; markdown: string }): Promise<void>;
 	setAttrs(input: { docId: string; attrs: Record<string, string> }): Promise<void>;
 	renameDoc(input: { docId: string; title: string }): Promise<void>;
-	moveUnder(input: { childIds: string[]; parentDocId: string }): Promise<void>;
 	/** Collapse (fold) top-level headings whose text starts with one of the prefixes. */
 	foldHeadings(input: { docId: string; headingPrefixes: string[] }): Promise<void>;
-	/** Prepend a back-link block (to the parent doc) at the top of a child doc. */
-	prependBacklink(input: { childDocId: string; parentDocId: string; parentTitle: string }): Promise<void>;
+	/** Write a `.md` attachment under data/assets/<relPath> (deterministic, overwrites
+	 *  in place) and return its `assets/<relPath>` link. Used for sub-agent transcripts. */
+	putAsset(input: { relPath: string; content: string }): Promise<string>;
 	/** Look up a doc id by `custom-ai-session-key` for state-loss recovery. */
 	findDocBySessionKey(sessionKey: string): Promise<string | undefined>;
 	/** Whether a doc id still exists (user may have deleted it). */

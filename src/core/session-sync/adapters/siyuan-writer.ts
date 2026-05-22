@@ -23,6 +23,23 @@ interface IdRow {
 	id?: string;
 }
 
+/** Write a workspace file via multipart /api/file/putFile (kernel's JSON fetcher
+ *  can't do multipart). Default is same-origin (plugin); inject for the CLI/sidecar. */
+async function defaultPutFile(path: string, content: string): Promise<void> {
+	const fd = new FormData();
+	fd.append("path", path);
+	fd.append("isDir", "false");
+	fd.append("file", new Blob([content], { type: "text/markdown" }), path.split("/").pop() || "file.md");
+	const resp = await fetch("/api/file/putFile", { method: "POST", body: fd });
+	const json = (await resp.json()) as { code: number; msg?: string };
+	if (json.code !== 0) throw new Error(`putFile ${path} failed: ${json.msg ?? json.code}`);
+}
+
+export interface SiyuanWriterOptions {
+	/** Override the file writer (e.g. CLI sidecar pointing at a remote endpoint). */
+	putFile?: (path: string, content: string) => Promise<void>;
+}
+
 /** Retry a kernel op that can transiently fail right after createDocWithMd while
  *  SiYuan's filetree index catches up (e.g. moveDocsByID "tree not found"). */
 async function withRetry<T>(fn: () => Promise<T>, attempts = 3, delayMs = 400): Promise<T> {
@@ -38,7 +55,8 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3, delayMs = 400): 
 	throw lastErr;
 }
 
-export function createSiyuanWriter(k: SiyuanKernel = defaultKernel): SiyuanWriter {
+export function createSiyuanWriter(k: SiyuanKernel = defaultKernel, opts: SiyuanWriterOptions = {}): SiyuanWriter {
+	const putFile = opts.putFile ?? defaultPutFile;
 	return {
 		async createDoc({ notebook, path, markdown }) {
 			const id = await k.filetree.createDocWithMd({ notebook, path, markdown });
@@ -64,12 +82,6 @@ export function createSiyuanWriter(k: SiyuanKernel = defaultKernel): SiyuanWrite
 			await k.filetree.renameDocByID(docId, title);
 		},
 
-		async moveUnder({ childIds, parentDocId }) {
-			// moveDocsByID can hit "tree not found" right after createDocWithMd
-			// (async filetree indexing) → retry; still self-heals next sync if it fails.
-			if (childIds.length > 0) await withRetry(() => k.filetree.moveDocsByID(childIds, parentDocId));
-		},
-
 		async foldHeadings({ docId, headingPrefixes }) {
 			const children = (await withRetry(() => k.blocks.getChildren(docId))) ?? [];
 			for (const block of children) {
@@ -80,11 +92,9 @@ export function createSiyuanWriter(k: SiyuanKernel = defaultKernel): SiyuanWrite
 			}
 		},
 
-		async prependBacklink({ childDocId, parentDocId, parentTitle }) {
-			const anchor = parentTitle.replace(/"/g, "'").replace(/[\r\n]+/g, " ").trim();
-			await withRetry(() =>
-				k.blocks.prepend({ data: `> ↑ **父会话** ((${parentDocId} "${anchor}"))`, parentID: childDocId }),
-			);
+		async putAsset({ relPath, content }) {
+			await withRetry(() => putFile(`/data/assets/${relPath}`, content));
+			return `assets/${relPath}`;
 		},
 
 		async findDocBySessionKey(sessionKey) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { reconcileOnce } from "../../src/core/session-sync/engine/reconcile";
-import { collectChildLinks, pendingChildMoves, pendingBacklinks } from "../../src/core/session-sync/engine/aggregate";
+import { collectChildLinks } from "../../src/core/session-sync/engine/aggregate";
 import type { DiscoveredFile, FileSource, SiyuanWriter, StateStore } from "../../src/core/session-sync/engine/ports";
 import type { SyncState } from "../../src/core/session-sync/engine/types";
 
@@ -19,8 +19,8 @@ function codex(id: string, opts: { role?: string; nickname?: string; parent?: st
 
 class FakeWriter implements SiyuanWriter {
 	docs = new Map<string, { markdown: string; exists: boolean }>();
+	assets = new Map<string, string>(); // relPath -> content
 	byKey = new Map<string, string>();
-	moves: Array<{ childIds: string[]; parentDocId: string }> = [];
 	private seq = 0;
 	async createDoc({ markdown }: { notebook: string; path: string; markdown: string }) {
 		const id = `doc-${++this.seq}`;
@@ -36,11 +36,11 @@ class FakeWriter implements SiyuanWriter {
 		if (k) this.byKey.set(k, docId);
 	}
 	async renameDoc() {}
-	async moveUnder(input: { childIds: string[]; parentDocId: string }) {
-		this.moves.push(input);
-	}
 	async foldHeadings() {}
-	async prependBacklink() {}
+	async putAsset({ relPath, content }: { relPath: string; content: string }) {
+		this.assets.set(relPath, content);
+		return `assets/${relPath}`;
+	}
 	async findDocBySessionKey(k: string) {
 		const id = this.byKey.get(k);
 		return id && this.docs.get(id)?.exists ? id : undefined;
@@ -54,7 +54,6 @@ function memState(initial?: SyncState): StateStore {
 	let s: SyncState = initial ?? { files: {}, sessions: {} };
 	return { async load() { return s; }, async save(n) { s = n; } };
 }
-
 function fileSource(files: Array<{ file: DiscoveredFile; content: string }>): FileSource {
 	return {
 		async list() { return files.map((f) => f.file); },
@@ -62,70 +61,48 @@ function fileSource(files: Array<{ file: DiscoveredFile; content: string }>): Fi
 		async probe() { return String(files.length); },
 	};
 }
-
 const f = (source: "codex", path: string, size: number, content: string) => ({ file: { source, path, sizeBytes: size, mtimeMs: size }, content });
 
-describe("aggregate helpers", () => {
+describe("collectChildLinks (asset attachments)", () => {
 	const state: SyncState = {
 		files: {},
 		sessions: {
 			"codex:main": { target: "siyuan", docId: "pdoc", sessionId: "main", source: "codex" },
-			"codex:w1": { target: "siyuan", docId: "c1", sessionId: "w1", source: "codex", parentSessionId: "main", agentRole: "worker", createdAt: "2026-05-01T10:00:00Z", title: "task w1" },
-			"codex:w2": { target: "siyuan", docId: "c2", sessionId: "w2", source: "codex", parentSessionId: "main", agentRole: "explorer", createdAt: "2026-05-01T11:00:00Z", title: "task w2" },
+			"codex:w1": { target: "siyuan", assetPath: "assets/session-sync/codex-w1.md", sessionId: "w1", source: "codex", parentSessionId: "main", agentRole: "worker", createdAt: "2026-05-01T10:00:00Z", title: "task w1" },
+			"codex:w2": { target: "siyuan", assetPath: "assets/session-sync/codex-w2.md", sessionId: "w2", source: "codex", parentSessionId: "main", agentRole: "explorer", createdAt: "2026-05-01T11:00:00Z", title: "task w2" },
 		},
 	};
-
-	it("collectChildLinks returns children sorted by createdAt", () => {
+	it("returns sub-agent asset links sorted by createdAt", () => {
 		const links = collectChildLinks(state, "codex", "main");
-		expect(links.map((l) => l.docId)).toEqual(["c1", "c2"]);
+		expect(links.map((l) => l.assetPath)).toEqual(["assets/session-sync/codex-w1.md", "assets/session-sync/codex-w2.md"]);
 		expect(links[0]).toMatchObject({ title: "task w1", role: "worker" });
-	});
-
-	it("pendingChildMoves returns un-nested children, skips already nested + orphans", () => {
-		expect(pendingChildMoves(state).map((m) => m.childDocId).sort()).toEqual(["c1", "c2"]);
-		const nested: SyncState = { files: {}, sessions: { ...state.sessions, "codex:w1": { ...state.sessions["codex:w1"], movedUnderParent: "pdoc" } } };
-		expect(pendingChildMoves(nested).map((m) => m.childDocId)).toEqual(["c2"]);
-		const orphan: SyncState = { files: {}, sessions: { "codex:w9": { target: "siyuan", docId: "c9", sessionId: "w9", source: "codex", parentSessionId: "nope" } } };
-		expect(pendingChildMoves(orphan)).toEqual([]);
-	});
-
-	it("pendingBacklinks returns children needing a back-link, skips already-linked", () => {
-		const links = pendingBacklinks(state);
-		expect(links.map((l) => l.childDocId).sort()).toEqual(["c1", "c2"]);
-		expect(links[0]).toMatchObject({ parentDocId: "pdoc" });
-		const linked: SyncState = { files: {}, sessions: { ...state.sessions, "codex:w1": { ...state.sessions["codex:w1"], backLinkedTo: "pdoc" } } };
-		expect(pendingBacklinks(linked).map((l) => l.childDocId)).toEqual(["c2"]);
 	});
 });
 
-describe("reconcile aggregation (codex parent + children)", () => {
-	it("nests children under the parent doc and links them in the parent body", async () => {
+describe("reconcile: sub-agents → attachments, mains → docs", () => {
+	it("writes children as .md assets and links them inline in the parent doc", async () => {
 		const writer = new FakeWriter();
 		const state = memState();
 		const files = fileSource([
 			f("codex", "/a/main.jsonl", 100, codex("main")),
-			f("codex", "/a/w1.jsonl", 110, codex("w1", { role: "worker", nickname: "Ada", parent: "main" })),
-			f("codex", "/a/w2.jsonl", 120, codex("w2", { role: "explorer", nickname: "Tu", parent: "main" })),
+			f("codex", "/a/w1.jsonl", 110, codex("w1", { role: "worker", parent: "main" })),
+			f("codex", "/a/w2.jsonl", 120, codex("w2", { role: "explorer", parent: "main" })),
 		]);
-		await reconcileOnce({ files, writer, state, notebookId: "nb", rootPath: "/AI" });
+		const r = await reconcileOnce({ files, writer, state, notebookId: "nb", rootPath: "/AI" });
 
-		// 3 docs created; 2 children moved under the parent doc.
-		expect(writer.docs.size).toBe(3);
-		const parentId = writer.byKey.get("codex:main")!;
-		const c1 = writer.byKey.get("codex:w1")!;
-		const c2 = writer.byKey.get("codex:w2")!;
-		expect(writer.moves).toHaveLength(2);
-		expect(writer.moves.every((m) => m.parentDocId === parentId)).toBe(true);
-		expect(writer.moves.map((m) => m.childIds[0]).sort()).toEqual([c1, c2].sort());
+		// Only the main session is a document; the two sub-agents are attachments.
+		expect(writer.docs.size).toBe(1);
+		expect([...writer.assets.keys()].sort()).toEqual(["session-sync/codex-w1.md", "session-sync/codex-w2.md"]);
+		expect(r.newSessions).toBe(3);
 
-		// Parent body links the children inline as sub-agent entries.
-		const parentMd = writer.docs.get(parentId)!.markdown;
+		// Parent doc links the children inline as asset links.
+		const parentMd = [...writer.docs.values()][0].markdown;
 		expect(parentMd).toContain("🧩 **子代理**");
-		expect(parentMd).toContain(`((${c1}`);
-		expect(parentMd).toContain(`((${c2}`);
+		expect(parentMd).toContain("(assets/session-sync/codex-w1.md)");
+		expect(parentMd).toContain("(assets/session-sync/codex-w2.md)");
 	});
 
-	it("B2: a mid-chain agent (A→B→C) lists its own child C in its body", async () => {
+	it("B2: a mid-chain sub-agent's attachment links its own child attachment (A→B→C)", async () => {
 		const writer = new FakeWriter();
 		const state = memState();
 		const files = fileSource([
@@ -134,36 +111,14 @@ describe("reconcile aggregation (codex parent + children)", () => {
 			f("codex", "/a/C.jsonl", 120, codex("C", { role: "explorer", parent: "B" })),
 		]);
 		await reconcileOnce({ files, writer, state, notebookId: "nb", rootPath: "/AI" });
-		const bId = writer.byKey.get("codex:B")!;
-		const cId = writer.byKey.get("codex:C")!;
-		// B is a sub-agent of A, but also a parent of C → B's body must link C.
-		expect(writer.docs.get(bId)!.markdown).toContain(`((${cId}`);
-		// C nested under B, B nested under A.
-		expect(writer.moves.some((m) => m.childIds[0] === cId && m.parentDocId === bId)).toBe(true);
-		expect(writer.moves.some((m) => m.childIds[0] === bId && m.parentDocId === writer.byKey.get("codex:A"))).toBe(true);
+		expect(writer.docs.size).toBe(1); // only A is a doc
+		const bMd = writer.assets.get("session-sync/codex-b.md")!; // slugify lowercases the id
+		expect(bMd).toContain("(assets/session-sync/codex-c.md)"); // B's attachment links C
+		const aMd = [...writer.docs.values()][0].markdown;
+		expect(aMd).toContain("(assets/session-sync/codex-b.md)"); // A's doc links B
 	});
 
-	it("nests a late-arriving child under a parent synced on an earlier run", async () => {
-		const writer = new FakeWriter();
-		const state = memState();
-		// Run 1: only the parent exists.
-		await reconcileOnce({ files: fileSource([f("codex", "/a/main.jsonl", 100, codex("main"))]), writer, state, notebookId: "nb", rootPath: "/AI" });
-		expect(writer.moves).toHaveLength(0);
-		// Run 2: a child appears; the parent file is unchanged (fast-path skipped),
-		// yet the full-state move pass nests the child under the existing parent.
-		await reconcileOnce({
-			files: fileSource([
-				f("codex", "/a/main.jsonl", 100, codex("main")),
-				f("codex", "/a/w1.jsonl", 110, codex("w1", { role: "worker", parent: "main" })),
-			]),
-			writer, state, notebookId: "nb", rootPath: "/AI",
-		});
-		expect(writer.moves).toHaveLength(1);
-		expect(writer.moves[0].parentDocId).toBe(writer.byKey.get("codex:main"));
-		expect(writer.moves[0].childIds[0]).toBe(writer.byKey.get("codex:w1"));
-	});
-
-	it("does not re-move children on an unchanged second run (idempotent)", async () => {
+	it("skips re-uploading an unchanged sub-agent attachment", async () => {
 		const writer = new FakeWriter();
 		const state = memState();
 		const files = fileSource([
@@ -171,8 +126,10 @@ describe("reconcile aggregation (codex parent + children)", () => {
 			f("codex", "/a/w1.jsonl", 110, codex("w1", { role: "worker", parent: "main" })),
 		]);
 		await reconcileOnce({ files, writer, state, notebookId: "nb", rootPath: "/AI" });
-		expect(writer.moves).toHaveLength(1);
-		await reconcileOnce({ files, writer, state, notebookId: "nb", rootPath: "/AI" });
-		expect(writer.moves).toHaveLength(1); // fast-path skip + movedUnderParent flag → no re-move
+		let puts = 0;
+		const origPut = writer.putAsset.bind(writer);
+		writer.putAsset = async (i) => { puts++; return origPut(i); };
+		await reconcileOnce({ files, writer, state, notebookId: "nb", rootPath: "/AI" }); // unchanged
+		expect(puts).toBe(0); // fast-path skip, no re-upload
 	});
 });

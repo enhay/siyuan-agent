@@ -48,12 +48,6 @@ function isHighSignalTool(tool: ToolActivity): boolean {
 	);
 }
 
-/** Block-ref anchors are double-quote delimited; swap quotes/newlines so a title
- *  can't terminate the ref early. */
-function refAnchor(title: string): string {
-	return title.replace(/"/g, "'").replace(/[\r\n]+/g, " ").trim();
-}
-
 /** Detect a real cross-tool CLI invocation (codex↔claude) in a shell summary.
  *  Excludes help/version/which and path noise (e.g. a `claude-code` directory). */
 function crossToolCmd(summary: string, other: "codex" | "claude"): string | null {
@@ -81,8 +75,8 @@ export interface RenderOptions {
 	title?: string;
 	/** Lifecycle status shown in the overview. Defaults to "completed". */
 	status?: string;
-	/** Sub-agent links injected under a "## 🧩 子代理" section. */
-	subAgents?: Array<{ title: string; role?: string; nickname?: string; docId: string; toolCount?: number; failedToolCount?: number }>;
+	/** Sub-agent attachment links inlined into the conversation at trigger time. */
+	subAgents?: Array<{ title: string; role?: string; nickname?: string; assetPath: string; toolCount?: number; failedToolCount?: number; createdAt?: string }>;
 }
 
 export function renderSession(session: NormalizedSession, options: RenderOptions = {}): string {
@@ -132,7 +126,7 @@ export function renderSession(session: NormalizedSession, options: RenderOptions
 	lines.push("## 💬 对话", "");
 	type Item =
 		| { ts: string; kind: "msg"; role: "user" | "assistant"; text: string }
-		| { ts: string; kind: "sub"; docId: string; label: string }
+		| { ts: string; kind: "sub"; assetPath: string; label: string }
 		| { ts: string; kind: "xtool"; other: string; cmd: string };
 	const items: Item[] = turns.map((m) => ({ ts: m.ts ?? "", kind: "msg", role: m.role, text: m.text }));
 	// Cross-tool CLI invocations (codex↔claude) inlined as notes at call time.
@@ -148,7 +142,7 @@ export function renderSession(session: NormalizedSession, options: RenderOptions
 		const seen = (subLabelCounts.get(base) ?? 0) + 1;
 		subLabelCounts.set(base, seen);
 		const label = `${seen === 1 ? base : `${base} (${seen})`} — ${s.title}`;
-		items.push({ ts: s.createdAt ?? "", kind: "sub", docId: s.docId, label });
+		items.push({ ts: s.createdAt ?? "", kind: "sub", assetPath: s.assetPath, label });
 	}
 	// Stable sort by timestamp keeps a sub-agent right after the turn that spawned it.
 	items.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
@@ -159,7 +153,8 @@ export function renderSession(session: NormalizedSession, options: RenderOptions
 		let prevRole: string | null = null;
 		for (const it of items) {
 			if (it.kind === "sub") {
-				lines.push(`> 🧩 **子代理** ((${it.docId} "${refAnchor(it.label)}"))`, "");
+				const text = it.label.replace(/[\r\n]+/g, " ").replace(/[[\]]/g, "").trim();
+				lines.push(`> 🧩 **子代理** [${text}](${it.assetPath})`, "");
 				prevRole = null; // a marker breaks any role grouping
 				continue;
 			}

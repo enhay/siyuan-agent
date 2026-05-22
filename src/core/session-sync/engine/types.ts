@@ -54,7 +54,10 @@ export interface FileCursor {
 /** Per-session record persisted in sync state and mirrored into doc custom attrs. */
 export interface SessionRecord {
 	target: "siyuan";
+	/** Set for main sessions (stored as SiYuan documents). */
 	docId?: string;
+	/** Set for sub-agent sessions (stored as `.md` attachments under data/assets/). */
+	assetPath?: string;
 	path?: string;
 	title?: string;
 	titleSource?: "ai" | "heuristic";

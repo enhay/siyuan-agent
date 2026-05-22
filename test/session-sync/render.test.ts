@@ -82,15 +82,15 @@ describe("renderSession readability", () => {
 		expect(md.match(/🧑 \*\*用户\*\*/g)?.length).toBe(1);
 	});
 
-	it("inlines sub-agent entries (no standalone section) with rollup + escaped refs", () => {
+	it("inlines sub-agent entries as asset links (no standalone section) with rollup", () => {
 		const md = renderSession(session(), {
 			subAgents: [
-				{ docId: "d1", title: 'fix the "login" bug', role: "worker", nickname: "Ada", toolCount: 5, failedToolCount: 1, createdAt: "2026-05-01T10:30:00Z" },
-				{ docId: "d2", title: "b", role: "worker", nickname: "Ada", toolCount: 3, failedToolCount: 0, createdAt: "2026-05-01T10:31:00Z" },
+				{ assetPath: "assets/session-sync/codex-d1.md", title: 'fix the "login" bug', role: "worker", nickname: "Ada", toolCount: 5, failedToolCount: 1, createdAt: "2026-05-01T10:30:00Z" },
+				{ assetPath: "assets/session-sync/codex-d2.md", title: "b", role: "worker", nickname: "Ada", toolCount: 3, failedToolCount: 0, createdAt: "2026-05-01T10:31:00Z" },
 			],
 		});
 		expect(md).not.toContain("## 🧩 子代理"); // no standalone section
-		expect(md).toContain("> 🧩 **子代理** ((d1 \"worker · Ada — fix the 'login' bug\"))");
+		expect(md).toContain('> 🧩 **子代理** [worker · Ada — fix the "login" bug](assets/session-sync/codex-d1.md)');
 		expect(md).toContain("worker · Ada (2)"); // de-duped label
 		expect(md).toContain("| 子代理 | 2（工具 8，失败 1） |"); // overview rollup kept
 	});
@@ -104,7 +104,7 @@ describe("renderSession readability", () => {
 					{ role: "assistant", text: "worker finished", timestamp: "2026-05-01T10:05:00Z" },
 				],
 			}),
-			{ subAgents: [{ docId: "w1", title: "the worker", role: "worker", createdAt: "2026-05-01T10:00:30Z" }] },
+			{ subAgents: [{ assetPath: "assets/session-sync/codex-w1.md", title: "the worker", role: "worker", createdAt: "2026-05-01T10:00:30Z" }] },
 		);
 		const convo = md.slice(md.indexOf("## 💬 对话"));
 		const iSpawn = convo.indexOf("spawning a worker");
