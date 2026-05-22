@@ -90,14 +90,24 @@ function cleanTitleText(text: string): string {
 		.trim();
 }
 
-/** Deterministic title: first substantive user message (skipping bare slash
- *  commands), truncated; falls back to a project/source/id label. */
-export function inferTitle(session: NormalizedSession): string {
+/** First user message with real content (≥3 chars after stripping a leading
+ *  slash-command). The shared basis for both the heuristic title and the AI title
+ *  seed — so a throwaway opener like "hi" is skipped in both, not fed to the model
+ *  (which would echo the instruction back as a junk title). */
+export function firstSubstantiveUserMessage(session: NormalizedSession): string | undefined {
 	for (const message of session.messages) {
 		if (message.role !== "user") continue;
 		const cleaned = cleanTitleText(message.text);
-		if (cleaned.length >= 3) return cleaned.length <= 80 ? cleaned : `${cleaned.slice(0, 77)}...`;
+		if (cleaned.length >= 3) return cleaned;
 	}
+	return undefined;
+}
+
+/** Deterministic title: first substantive user message, truncated; falls back to
+ *  a project/source/id label. */
+export function inferTitle(session: NormalizedSession): string {
+	const msg = firstSubstantiveUserMessage(session);
+	if (msg) return msg.length <= 80 ? msg : `${msg.slice(0, 77)}...`;
 	return `${projectSlug(session.cwd)} ${session.source} session ${shortSessionId(session.sessionId)}`;
 }
 

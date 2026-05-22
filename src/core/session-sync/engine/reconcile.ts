@@ -13,7 +13,7 @@ import type { NormalizedSession, ReconcileResult, SessionRecord, SyncState } fro
 import { parseCodexSession } from "./parse/codex";
 import { parseClaudeSession } from "./parse/claude";
 import { renderSession, FOLDABLE_HEADING_PREFIXES } from "./render";
-import { assetRelPath, buildDocName, buildSiyuanAttrs, buildSiyuanDocPath, contentHash, fileKey, inferTitle, sessionKey } from "./identity";
+import { assetRelPath, buildDocName, buildSiyuanAttrs, buildSiyuanDocPath, contentHash, fileKey, firstSubstantiveUserMessage, inferTitle, sessionKey } from "./identity";
 import { inferStatus } from "./status";
 import { collectChildLinks, type ChildLink } from "./aggregate";
 
@@ -49,9 +49,13 @@ async function resolveTitle(
 	if (existing?.titleSource === "ai" && existing.title) {
 		return { title: existing.title, titleSource: "ai" };
 	}
-	if (deps.aiTitleEnabled && deps.titleProvider) {
+	// Seed the model with the first *substantive* user message (same basis as the
+	// heuristic). No real content → skip the model entirely, so it can't echo the
+	// instruction back as a junk title.
+	const seed = firstSubstantiveUserMessage(session);
+	if (deps.aiTitleEnabled && deps.titleProvider && seed) {
 		const ai = await deps.titleProvider
-			.generate({ title: inferTitle(session), firstUserMessage: session.messages.find((m) => m.role === "user")?.text })
+			.generate({ title: inferTitle(session), firstUserMessage: seed })
 			.catch(() => undefined);
 		if (ai && ai.trim()) return { title: ai.trim(), titleSource: "ai" };
 	}
