@@ -35,11 +35,11 @@ describe("renderSession readability", () => {
 		expect(md).not.toContain("> ```js");
 	});
 
-	it("结论 is a 问→答 TL;DR, not the full last message repeated verbatim", () => {
+	it("结论 is a muted 问→答 callout (blockquote, no heading)", () => {
 		const md = renderSession(session());
-		expect(md).toContain("## 🎯 结论");
-		expect(md).toContain("**问：** fix the login bug");
-		expect(md).toContain("**答：** Done.");
+		expect(md).not.toContain("## 🎯 结论"); // de-emphasized: not a heading
+		expect(md).toContain("> 🎯 **问** fix the login bug");
+		expect(md).toContain("> **答** Done.");
 	});
 
 	it("tool + warning sections use foldable heading prefixes", () => {

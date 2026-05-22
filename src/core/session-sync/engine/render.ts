@@ -68,10 +68,10 @@ function oneLine(text: string, max: number): string {
 	return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
 }
 
-/** First `max` chars (keeping line breaks so lists/steps survive) for the TL;DR. */
-function excerpt(text: string, max: number): string {
-	const t = text.replace(/\n{3,}/g, "\n\n").trim();
-	return t.length <= max ? t : `${t.slice(0, max).trimEnd()}…`;
+/** A flat, code-free one-line teaser for the muted 结论 callout (code fences
+ *  collapsed to a placeholder so a blockquote never wraps a code block). */
+function teaser(text: string, max: number): string {
+	return oneLine(text.replace(/```[\s\S]*?```/g, " [代码] "), max);
 }
 
 export interface RenderOptions {
@@ -116,14 +116,24 @@ export function renderSession(session: NormalizedSession, options: RenderOptions
 	// Sub-agent entries are inlined into the 对话 timeline at their trigger time
 	// (see below), so there is no standalone 子代理 section.
 
-	// ── 🎯 结论 (TL;DR) ──
+	// ── 🎯 结论 (TL;DR) — a muted callout (blockquote), not a heading, to keep it
+	//    visually light: it's a heuristic 问/答 teaser (答 = the last assistant turn),
+	//    not an authoritative summary.
 	const firstUser = turns.find((m) => m.role === "user");
 	const lastAssistant = [...turns].reverse().find((m) => m.role === "assistant");
 	if (firstUser || lastAssistant || failed.length > 0) {
-		lines.push("## 🎯 结论", "");
-		if (firstUser) lines.push(`**问：** ${oneLine(firstUser.text, 120)}`, "");
-		if (lastAssistant) lines.push(`**答：** ${excerpt(lastAssistant.text, 500)}`, "");
-		if (failed.length > 0) lines.push(`> ⚠️ 有 ${failed.length} 个工具调用失败，见下方折叠区。`, "");
+		const parts: string[] = [];
+		if (firstUser) parts.push(`🎯 **问** ${teaser(firstUser.text, 120)}`);
+		if (lastAssistant) parts.push(`**答** ${teaser(lastAssistant.text, 220)}`);
+		if (failed.length > 0) parts.push(`⚠️ 有 ${failed.length} 个工具调用失败，见下方折叠区。`);
+		lines.push(
+			parts
+				.join("\n\n")
+				.split("\n")
+				.map((l) => (l ? `> ${l}` : ">"))
+				.join("\n"),
+			"",
+		);
 	}
 
 	// ── 💬 对话 ── (chronological; sub-agent entries inlined at their trigger time)
