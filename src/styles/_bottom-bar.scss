@@ -498,7 +498,7 @@
 	pointer-events: none;
 }
 
-@media (max-width: 900px) {
+@container agent-panel (max-width: 900px) {
 	.chat-panel__bottom-footer {
 		flex-wrap: wrap;
 		align-items: stretch;
@@ -507,6 +507,13 @@
 	.chat-panel__actions {
 		width: auto;
 		justify-content: flex-end;
+	}
+}
+
+/* Very narrow dock: drop the reasoning sub-label so the model pill + send fit. */
+@container agent-panel (max-width: 300px) {
+	.chat-panel__model-picker-reasoning {
+		display: none;
 	}
 }
 

@@ -1,14 +1,11 @@
 import {
 	Plugin,
 	showMessage,
-	getFrontend,
 	Menu,
-	openTab,
 } from "siyuan";
 import "./styles/index.scss";
 import {
 	AgentConfig,
-	DEFAULT_CONFIG,
 	normalizeAgentConfig,
 	resolveModelConfig,
 } from "./types";
@@ -30,14 +27,13 @@ import { createTranslator, type Translator } from "./i18n";
 
 const CONFIG_STORAGE = "agent-config";
 const DOCK_TYPE = "agent-chat";
-const TAB_TYPE = "agent-chat-tab";
 const DOCK_TITLE = "AI Agent";
-type PanelPosition = "right" | "bottom";
 
 export default class SiYuanAgent extends Plugin {
 
 	private chatPanel: ChatPanel | null = null;
-	private isMobile: boolean;
+	private dockElement: Element | null = null;
+	private dockWidthTimer: ReturnType<typeof setTimeout> | null = null;
 	private pendingContexts: string[] = [];
 	private pendingView: "settings" | null = null;
 	private sessionStore: SessionStore;
@@ -48,8 +44,6 @@ export default class SiYuanAgent extends Plugin {
 
 	onload() {
 		this.translator = createTranslator(this.i18n);
-		const frontend = getFrontend();
-		this.isMobile = frontend === "mobile" || frontend === "browser-mobile";
 
 		// Expose app instance for tools that need it (e.g., openTab)
 		(globalThis as any).siyuanApp = this.app;
@@ -102,60 +96,44 @@ export default class SiYuanAgent extends Plugin {
 			}
 		});
 
-		if (this.isMobile) {
-			this.addDock({
-				config: {
-					position: "RightTop",
-					size: { width: 360, height: 0 },
-					icon: "iconAgent",
-					title: DOCK_TITLE,
-					hotkey: "⌥⌘A",
-					show: false,
-				},
-				data: {},
-				type: DOCK_TYPE,
-				init: (dock) => {
-					dock.element.innerHTML = `<div class="toolbar toolbar--border toolbar--dark">
-						<svg class="toolbar__icon"><use xlink:href="#iconAgent"></use></svg>
-						<div class="toolbar__text">${DOCK_TITLE}</div>
-					</div>
-					<div class="fn__flex-1" style="overflow:hidden"></div>`;
-					this.chatPanel = new ChatPanel(
-						dock.element.querySelector(".fn__flex-1"),
-						this,
-						getInteractiveTools(),
-						this.sessionStore,
-						this.scheduledTaskManager,
-						this.translator,
-					);
-					this.flushPendingContexts();
-				},
-				destroy: () => {
-					this.chatPanel?.destroy();
-					this.chatPanel = null;
-				}
-			});
-		} else {
-			this.addTab({
-				type: TAB_TYPE,
-				init: (custom) => {
-					custom.element.innerHTML = "<div class=\"fn__flex-1\" style=\"height:100%;overflow:hidden\"></div>";
-					this.chatPanel = new ChatPanel(
-						custom.element.querySelector(".fn__flex-1"),
-						this,
-						getInteractiveTools(),
-						this.sessionStore,
-						this.scheduledTaskManager,
-						this.translator,
-					);
-					this.flushPendingContexts();
-				},
-				destroy: () => {
-					this.chatPanel?.destroy();
-					this.chatPanel = null;
-				},
-			});
-		}
+		// One dock for both desktop and mobile: a dedicated, resizable side panel
+		// that never mixes with document tabs. Initial width is restored from
+		// config (SiYuan also persists dock size in its own layout).
+		this.addDock({
+			config: {
+				position: "RightTop",
+				size: { width: this.getConfig().dockWidth || 360, height: 0 },
+				icon: "iconAgent",
+				title: DOCK_TITLE,
+				hotkey: "⌥⌘A",
+				show: false,
+			},
+			data: {},
+			type: DOCK_TYPE,
+			init: (dock) => {
+				this.dockElement = dock.element;
+				dock.element.innerHTML = `<div class="toolbar toolbar--border toolbar--dark">
+					<svg class="toolbar__icon"><use xlink:href="#iconAgent"></use></svg>
+					<div class="toolbar__text">${DOCK_TITLE}</div>
+				</div>
+				<div class="fn__flex-1" style="overflow:hidden"></div>`;
+				this.chatPanel = new ChatPanel(
+					dock.element.querySelector<HTMLElement>(".fn__flex-1"),
+					this,
+					getInteractiveTools(),
+					this.sessionStore,
+					this.scheduledTaskManager,
+					this.translator,
+				);
+				this.flushPendingContexts();
+			},
+			resize: () => this.recordDockWidth(),
+			destroy: () => {
+				this.chatPanel?.destroy();
+				this.chatPanel = null;
+				this.dockElement = null;
+			},
+		});
 
 		/* --- Commands --- */
 		this.addCommand({
@@ -350,21 +328,6 @@ export default class SiYuanAgent extends Plugin {
 	private openTopBarMenu(event: MouseEvent): void {
 		const menu = new Menu();
 		menu.addItem({
-			icon: "iconRightTop",
-			label: this.translator.t("openToRight"),
-			click: () => {
-				void this.setPanelPosition("right", true);
-			},
-		});
-		menu.addItem({
-			icon: "iconBottomLeft",
-			label: this.translator.t("openToBottom"),
-			click: () => {
-				void this.setPanelPosition("bottom", true);
-			},
-		});
-		menu.addSeparator();
-		menu.addItem({
 			icon: "iconSettings",
 			label: this.translator.t("settings"),
 			click: () => {
@@ -377,25 +340,20 @@ export default class SiYuanAgent extends Plugin {
 		});
 	}
 
-	private getPluginTabType(): string {
-		return `${this.name}${TAB_TYPE}`;
-	}
-
 	private getConfig(): AgentConfig {
 		return normalizeAgentConfig(this.data[CONFIG_STORAGE] || {});
 	}
 
-	private async setPanelPosition(position: PanelPosition, reopen = false): Promise<void> {
-		const nextConfig: AgentConfig = {
-			...this.getConfig(),
-			panelPosition: position,
-		};
-		this.data[CONFIG_STORAGE] = nextConfig;
-		await this.saveData(CONFIG_STORAGE, nextConfig);
-		if (!this.isMobile && reopen) {
-			this.closeChatTabs();
-			await this.openChatTab();
-		}
+	/** Persist the current dock width (debounced) so it is restored next launch. */
+	private recordDockWidth(): void {
+		const width = this.dockElement?.clientWidth;
+		if (!width || width < 120) return;
+		if (this.dockWidthTimer) clearTimeout(this.dockWidthTimer);
+		this.dockWidthTimer = setTimeout(() => {
+			const next: AgentConfig = { ...this.getConfig(), dockWidth: width };
+			this.data[CONFIG_STORAGE] = next;
+			void this.saveData(CONFIG_STORAGE, next);
+		}, 500);
 	}
 
 	private sendContextToChat(text: string): void {
@@ -440,50 +398,11 @@ export default class SiYuanAgent extends Plugin {
 	}
 
 	private async toggleChatPanel(): Promise<void> {
-		if (this.isMobile) {
-			this.toggleChatDock();
-			return;
-		}
-		const openedTabs = this.getOpenedChatTabs();
-		if (openedTabs.length > 0) {
-			this.closeChatTabs();
-			return;
-		}
-		await this.openChatTab();
+		this.toggleChatDock();
 	}
 
 	private async ensureChatVisible(): Promise<void> {
-		if (this.isMobile) {
-			this.openChatDock();
-			return;
-		}
-		const openedTabs = this.getOpenedChatTabs();
-		if (openedTabs.length > 0) {
-			return;
-		}
-		await this.openChatTab();
-	}
-
-	private async openChatTab(): Promise<void> {
-		await openTab({
-			app: this.app,
-			custom: {
-				id: this.getPluginTabType(),
-				icon: "iconAgent",
-				title: DOCK_TITLE,
-			},
-			position: this.getConfig().panelPosition || DEFAULT_CONFIG.panelPosition,
-		});
-	}
-
-	private getOpenedChatTabs(): any[] {
-		return this.getOpenedTab()[TAB_TYPE] || [];
-	}
-
-	private closeChatTabs(): void {
-		this.getOpenedChatTabs().forEach((model) => {
-			model.tab?.parent?.removeTab(model.tab.id);
-		});
+		this.openChatDock();
 	}
 
 	private openChatDock(): void {

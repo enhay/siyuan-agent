@@ -62,7 +62,10 @@ export interface AgentConfig {
 	apiKey: string;
 	model: string;
 	customInstructions: string;
+	/** @deprecated tab-position from the old editor-tab mount; the panel is a dock now. */
 	panelPosition?: "right" | "bottom";
+	/** Persisted Agent dock width in px; restored as the dock's initial size. */
+	dockWidth?: number;
 	guideDoc?: { id: string; title: string } | null;
 	defaultNotebook?: { id: string; name: string } | null;
 	langSmithEnabled?: boolean;
@@ -92,6 +95,7 @@ export const DEFAULT_CONFIG: AgentConfig = {
 	model: "gpt-4o",
 	customInstructions: "",
 	panelPosition: "right",
+	dockWidth: 360,
 	guideDoc: null,
 	langSmithEnabled: false,
 	langSmithApiKey: "",

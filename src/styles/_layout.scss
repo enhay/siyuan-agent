@@ -1,5 +1,8 @@
 /* Chat panel layout */
 .chat-panel {
+	/* Query container: internal layout responds to the panel's own width (the
+	 * dock is user-resizable), not the viewport. See @container rules below. */
+	container: agent-panel / inline-size;
 	display: flex;
 	flex-direction: column;
 	height: 100%;

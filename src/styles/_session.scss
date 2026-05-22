@@ -421,7 +421,7 @@
 	gap: 8px;
 }
 
-@media (max-width: 900px) {
+@container agent-panel (max-width: 900px) {
 	.chat-panel__tasks-board {
 		grid-template-columns: 1fr;
 	}
