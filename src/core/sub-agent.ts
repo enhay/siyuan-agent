@@ -1,9 +1,7 @@
-import { HumanMessage } from "@langchain/core/messages";
-import { tool, type ToolRuntime } from "@langchain/core/tools";
+import { generateText, stepCountIs, tool } from "ai";
 import type { AgentTool } from "./agent-types";
 import type { ZodTypeAny } from "zod";
-import { makeAgent, fetchGuideDoc, type MakeAgentOptions } from "./agent";
-import { messageKind, messageContent } from "./message-shape";
+import { makeAgent, fetchGuideDoc, type AgentRuntime, type MakeAgentOptions } from "./agent";
 import { resolveSubAgentModelConfig, type AgentConfig } from "../types";
 import { defaultTranslator, localizeErrorMessage, type Translator } from "../i18n";
 
@@ -17,17 +15,13 @@ function resolveGuideContent(
 	return fetchGuideDoc(docId);
 }
 
-type AgentLike = {
-	invoke: (input: { messages: HumanMessage[] }, options?: Record<string, unknown>) => Promise<any>;
-};
-
 type ToolsetResolver = AgentTool[] | (() => AgentTool[]);
 
 type CreateAgentFn = (
 	config: AgentConfig,
 	tools: AgentTool[],
 	opts?: MakeAgentOptions,
-) => AgentLike | Promise<AgentLike>;
+) => AgentRuntime | Promise<AgentRuntime>;
 
 export interface SubAgentToolOptions<TSchema extends ZodTypeAny = ZodTypeAny> {
 	name: string;
@@ -57,20 +51,16 @@ function inputToPrompt(input: unknown): string {
 	return JSON.stringify(input, null, 2);
 }
 
+/** Default result extractor: the final text of a generateText run. */
 export function extractLastAiMessageContent(result: any): string {
-	const messages = Array.isArray(result?.messages) ? result.messages : [];
-	for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
-		if (messageKind(messages[idx]) !== "ai") continue;
-		const content = messageContent(messages[idx]);
-		if (content) return content;
-	}
+	if (typeof result?.text === "string" && result.text) return result.text;
 	return defaultTranslator.t("subAgent.noFinal");
 }
 
 export async function invokeSubAgent<TSchema extends ZodTypeAny>(
 	options: SubAgentToolOptions<TSchema>,
 	input: unknown,
-	runtime: ToolRuntime,
+	runtime: { signal?: AbortSignal },
 ): Promise<string> {
 	const extractResult = options.extractResult ?? extractLastAiMessageContent;
 	const createChildAgent = options.createAgent ?? makeAgent;
@@ -78,29 +68,25 @@ export async function invokeSubAgent<TSchema extends ZodTypeAny>(
 	const config = await options.getAgentConfig();
 	const subAgentModel = resolveSubAgentModelConfig(config);
 	const childTools = resolveToolset(options.toolset)
-		.filter((toolDef) => toolDef.name !== options.name);
+		.filter((toolDef) => (toolDef as { __toolName?: string }).__toolName !== options.name);
 	const i18n = options.i18n || defaultTranslator;
 	const guideContent = await resolveGuideContent(options, config);
-	const childAgent = await createChildAgent(config, childTools, {
+	const agent = await createChildAgent(config, childTools, {
 		extraSystemPrompt: options.systemPrompt,
 		modelOverride: subAgentModel,
 		i18n,
 		guideContent,
 	});
 	const prompt = inputToPrompt(input);
-	const invokeOptions: Record<string, unknown> = {
-		recursionLimit,
-		signal: runtime.signal,
-	};
-	if (runtime.context !== undefined) {
-		invokeOptions.context = runtime.context;
-	}
-	if (runtime.config?.callbacks) {
-		invokeOptions.callbacks = runtime.config.callbacks;
-	}
-	const result = await childAgent.invoke({
-		messages: [new HumanMessage({ content: prompt })],
-	}, invokeOptions);
+	const result = await generateText({
+		model: agent.model,
+		system: agent.system,
+		tools: agent.tools,
+		messages: [{ role: "user", content: prompt }],
+		stopWhen: stepCountIs(recursionLimit),
+		abortSignal: runtime.signal,
+		...(agent.providerOptions ? { providerOptions: agent.providerOptions } : {}),
+	});
 	const text = extractResult(result);
 	// Guard against empty or excessively long sub-agent output
 	if (!text || !text.trim()) return i18n.t("subAgent.noResult");
@@ -111,7 +97,7 @@ export async function invokeSubAgent<TSchema extends ZodTypeAny>(
 export async function invokeSubAgentSafe<TSchema extends ZodTypeAny>(
 	options: SubAgentToolOptions<TSchema>,
 	input: unknown,
-	runtime: ToolRuntime,
+	runtime: { signal?: AbortSignal },
 ): Promise<string> {
 	try {
 		return await invokeSubAgent(options, input, runtime);
@@ -127,12 +113,12 @@ export async function invokeSubAgentSafe<TSchema extends ZodTypeAny>(
 export function createSubAgentTool<TSchema extends ZodTypeAny>(
 	options: SubAgentToolOptions<TSchema>,
 ): AgentTool {
-	return tool(
-		async (input: unknown, runtime: ToolRuntime) => invokeSubAgentSafe(options, input, runtime),
-		{
-			name: options.name,
-			description: options.description,
-			schema: options.schema,
-		},
-	);
+	const t = tool({
+		description: options.description,
+		inputSchema: options.schema,
+		execute: async (input: unknown, { abortSignal }) =>
+			invokeSubAgentSafe(options, input, { signal: abortSignal }),
+	});
+	(t as AgentTool & { __toolName: string }).__toolName = options.name;
+	return t as AgentTool;
 }

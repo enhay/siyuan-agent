@@ -31,7 +31,6 @@ export {
 	type ToolUIEventUnknownStructured,
 	type ToolUIEventPayload,
 	type ToolUIEvent,
-	type ChunkParserState,
 	type AgentStreamUiEvent,
 	type RunAgentStreamResult,
 	type ToolMessageUi,

@@ -11,7 +11,7 @@
  * - Response is JSON-RPC result
  * - SSE streaming for notifications (optional)
  */
-import { tool } from "@langchain/core/tools";
+import { tool } from "ai";
 import type { AgentTool } from "./agent-types";
 import { z } from "zod";
 import type { McpServerConfig } from "../types";
@@ -219,27 +219,27 @@ function buildZodSchema(inputSchema?: McpToolDefinition["inputSchema"]): z.ZodOb
 	return z.object(shape);
 }
 
-/** Create LangChain tools from an MCP client's tool list */
+/** Create AgentTools (AI SDK) from an MCP client's tool list. */
 export function mcpToolsToLangChain(
 	client: McpClient,
 	toolDefs: McpToolDefinition[],
 ): AgentTool[] {
 	return toolDefs.map((def) => {
 		const schema = buildZodSchema(def.inputSchema);
-		return tool(
-			async (args) => {
+		const t = tool({
+			description: `[MCP: ${client.name}] ${def.description || def.name}`,
+			inputSchema: schema,
+			execute: async (args) => {
 				try {
-					return await client.callTool(def.name, args);
+					return await client.callTool(def.name, args as Record<string, unknown>);
 				} catch (err) {
 					return `[MCP tool error: ${def.name}] ${String(err)}`;
 				}
 			},
-			{
-				name: `mcp_${client.id}_${def.name}`,
-				description: `[MCP: ${client.name}] ${def.description || def.name}`,
-				schema,
-			},
-		);
+		});
+		// AI SDK tools carry no name — stash it for the ToolSet record key (agent.ts).
+		(t as AgentTool & { __toolName: string }).__toolName = `mcp_${client.id}_${def.name}`;
+		return t as AgentTool;
 	});
 }
 

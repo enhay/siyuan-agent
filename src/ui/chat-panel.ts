@@ -20,7 +20,7 @@ import {
 	type ReasoningEffort,
 } from "../types";
 import { defaultTranslator, localizeErrorMessage, type Translator } from "../i18n";
-import { makeAgent, makeTracer, fetchGuideDoc } from "../core/agent";
+import { makeAgent, fetchGuideDoc } from "../core/agent";
 import { mergeState, runAgentStream } from "../core/stream-runtime";
 import { renderMarkdown } from "./markdown";
 import { SessionStore } from "../core/session-store";
@@ -28,7 +28,7 @@ import { ScheduledTaskManager } from "../core/scheduled-task-manager";
 import { presetToSchedule, DEFAULT_TIME, type PresetForm, type SchedulePreset } from "../core/schedule-presets";
 import { ensureMessagesUi } from "../core/ui-message-builder";
 import { compactMessages, shouldCompact } from "../core/compaction";
-import { createChatModel } from "../core/chat-model";
+import { createModel } from "../core/model";
 import { getDefaultTools } from "../core/tools";
 import { kernel, sqlValue } from "../core/tools/siyuan-kernel";
 import { SettingsView, type ChatPanelHost } from "./settings-view";
@@ -1100,18 +1100,16 @@ export class ChatPanel implements ChatPanelHost {
 		try {
 			const modelOverride = sessionModelId ? activeModel : null;
 			const guideContent = config.guideDoc?.id ? await fetchGuideDoc(config.guideDoc.id) : "";
-			const agent = await makeAgent(config, this.tools, {
+			const agent = makeAgent(config, this.tools, {
 				extraSystemPrompt,
 				modelOverride,
 				i18n: this.i18n,
 				reasoningEffort,
 				guideContent,
 			});
-			const tracer = makeTracer(config);
 			const result = await runAgentStream({
-				agent,
+				...agent,
 				input,
-				callbacks: tracer ? [tracer] : undefined,
 				signal: this.abortCtrl?.signal,
 				existingToolUIEvents,
 				onUiEvent: (event) => {
@@ -1209,7 +1207,7 @@ export class ChatPanel implements ChatPanelHost {
 
 			if (!this.abortCtrl?.signal.aborted && shouldCompact(latestState)) {
 				try {
-					const compactModel = createChatModel(activeModel, { temperature: 0 });
+					const compactModel = createModel(activeModel);
 					await compactMessages(s.state, { model: compactModel, source: "auto" });
 				} catch (_) { /* best-effort, don't block save */ }
 			}
@@ -1307,7 +1305,7 @@ export class ChatPanel implements ChatPanelHost {
 
 		this.setLoading(true);
 		try {
-			const model = createChatModel(config, { temperature: 0 });
+			const model = createModel(config);
 			const summary = await compactMessages(s.state, {
 				model,
 				keepRecentTurns: 4,

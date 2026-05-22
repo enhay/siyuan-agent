@@ -1,10 +1,7 @@
-import { createAgent, summarizationMiddleware } from "langchain";
-import { LangChainTracer } from "@langchain/core/tracers/tracer_langchain";
-import { Client } from "langsmith";
-import type { AgentTool } from "./agent-types";
+import type { AgentModel, AgentTool, AgentToolSet } from "./agent-types";
 import { buildSystemPrompt, resolveModelConfig, type AgentConfig, type ModelConfig, type ReasoningEffort } from "../types";
 import { defaultTranslator, type Translator } from "../i18n";
-import { createChatModel } from "./chat-model";
+import { createModel, reasoningProviderOptions } from "./model";
 import { kernel } from "./tools/siyuan-kernel";
 
 /** Fetch the guide doc body; returns "" on failure. Kept exported so callers fetch it once and pass it in. */
@@ -48,6 +45,16 @@ export function buildAgentSystemPrompt(
 	return systemPrompt;
 }
 
+/** Build the keyed ToolSet that `streamText`/`generateText` expects from our AgentTool[]. */
+export function toolSetFromArray(tools: AgentTool[]): AgentToolSet {
+	const set: Record<string, AgentTool> = {};
+	for (const t of tools) {
+		const name = (t as { __toolName?: string }).__toolName;
+		if (name) set[name] = t;
+	}
+	return set as AgentToolSet;
+}
+
 export interface MakeAgentOptions {
 	extraSystemPrompt?: string | null;
 	modelOverride?: ModelConfig | null;
@@ -56,44 +63,26 @@ export interface MakeAgentOptions {
 	guideContent?: string;
 }
 
-/** Builds the agent. No fetch: guideContent must be supplied by the caller. */
+/** Materials for a single agent run: model, system prompt, keyed tools, per-call options. */
+export interface AgentRuntime {
+	model: AgentModel;
+	system: string;
+	tools: AgentToolSet;
+	providerOptions: Record<string, Record<string, unknown>>;
+}
+
+/** Assemble the agent run materials. No fetch: guideContent must be supplied by the caller. */
 export function makeAgent(
 	config: AgentConfig,
 	tools: AgentTool[],
 	opts: MakeAgentOptions = {},
-) {
+): AgentRuntime {
 	const { extraSystemPrompt, modelOverride, i18n = defaultTranslator, reasoningEffort = "default", guideContent = "" } = opts;
 	const mc = modelOverride || resolveModelConfig(config);
-	const model = createChatModel(mc, { streaming: true, reasoningEffort });
-
-	const systemPrompt = buildAgentSystemPrompt(config, guideContent, i18n, extraSystemPrompt);
-
-	const middleware = [
-		summarizationMiddleware({
-			model,
-			trigger: { messages: 30 },
-			keep: { messages: 12 },
-		}),
-	] as const;
-
-	return createAgent({
-		model,
-		tools,
-		systemPrompt,
-		middleware,
-	});
-}
-
-export function makeTracer(config: AgentConfig): LangChainTracer | null {
-	if (!config.langSmithEnabled || !config.langSmithApiKey) return null;
-
-	const client = new Client({
-		apiKey: config.langSmithApiKey,
-		apiUrl: config.langSmithEndpoint || "https://api.smith.langchain.com",
-	});
-
-	return new LangChainTracer({
-		projectName: config.langSmithProject || "SiYuan-Agent",
-		client,
-	});
+	return {
+		model: createModel(mc),
+		system: buildAgentSystemPrompt(config, guideContent, i18n, extraSystemPrompt),
+		tools: toolSetFromArray(tools),
+		providerOptions: reasoningProviderOptions(reasoningEffort, mc),
+	};
 }

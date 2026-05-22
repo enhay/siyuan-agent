@@ -1,13 +1,19 @@
-import {
-	AIMessage,
-	HumanMessage,
-	SystemMessage,
-	ToolMessage,
-} from "@langchain/core/messages";
+/**
+ * stream-runtime — the streaming engine, on AI SDK v6 `streamText`.
+ *
+ * `runAgentStream` runs the agent loop and translates `result.fullStream` parts
+ * into the stable {@link AgentStreamUiEvent} contract the UI renders, and builds
+ * the persisted `messagesUi` (lc:1 dicts via {@link UiMessageBuilder}) plus the
+ * LLM-context `messages` (AI SDK `ModelMessage[]`). Tool custom UI events arrive
+ * out-of-band through `experimental_context.emit` (see define-tool.ts).
+ */
+
+import { streamText, stepCountIs, type ModelMessage } from "ai";
 import type {
+	AgentModel,
 	AgentState,
 	AgentStreamUiEvent,
-	ChunkParserState,
+	AgentToolSet,
 	RunAgentStreamResult,
 	TodoList,
 	ToolUIEvent,
@@ -15,45 +21,10 @@ import type {
 	UiMessage,
 } from "../types";
 import { UiMessageBuilder } from "./ui-message-builder";
-import {
-	genId,
-	messageKind,
-	messageContent,
-	messageReasoning,
-	messageToolCallId,
-	messageToolCalls,
-	toolCallId as readToolCallId,
-	messagesFromDict,
-} from "./message-shape";
+import { genId, toModelMessages } from "./message-shape";
 
-function cloneState(source: AgentState | null | undefined): AgentState {
-	if (!source) return {};
-	return {
-		...source,
-		messages: Array.isArray(source.messages) ? [...source.messages] : source.messages,
-		messagesUi: Array.isArray(source.messagesUi) ? [...source.messagesUi] : source.messagesUi,
-		compaction: source.compaction ? { ...source.compaction } : source.compaction,
-		todos: source.todos ? { ...source.todos, items: [...source.todos.items] } : source.todos,
-		toolUIEvents: Array.isArray(source.toolUIEvents) ? [...source.toolUIEvents] : source.toolUIEvents,
-	};
-}
-
-function normalizeReasoningDelta(current: string, incoming: string): string {
-	if (!incoming) return "";
-	if (incoming.startsWith(current)) {
-		return incoming.slice(current.length);
-	}
-	return incoming;
-}
-
-function normalizeToolUIEvent(raw: string, toolCallIndex: number, toolName?: string): ToolUIEvent {
-	let parsed: any = null;
-	try {
-		parsed = JSON.parse(raw);
-	} catch {
-		/* plain string */
-	}
-
+/** Parse a tool writer payload (already an object) into a typed ToolUIEvent. */
+function normalizeToolUIEvent(parsed: any, raw: string, toolCallIndex: number, toolName?: string): ToolUIEvent {
 	let payload: ToolUIEventPayload;
 	if (parsed?.__tool_type === "activity") {
 		payload = {
@@ -67,11 +38,7 @@ function normalizeToolUIEvent(raw: string, toolCallIndex: number, toolName?: str
 			open: parsed.open === undefined ? undefined : Boolean(parsed.open),
 		};
 	} else if (parsed?.__tool_type === "created_document" && parsed.id) {
-		payload = {
-			type: "created_document",
-			id: String(parsed.id),
-			path: parsed.path ? String(parsed.path) : undefined,
-		};
+		payload = { type: "created_document", id: String(parsed.id), path: parsed.path ? String(parsed.path) : undefined };
 	} else if (parsed?.__tool_type === "document_link" && parsed.id) {
 		payload = {
 			type: "document_link",
@@ -106,11 +73,7 @@ function normalizeToolUIEvent(raw: string, toolCallIndex: number, toolName?: str
 			open: Boolean(parsed.open),
 		};
 	} else if (parsed && typeof parsed === "object") {
-		payload = {
-			type: "unknown_structured",
-			raw,
-			payload: parsed,
-		};
+		payload = { type: "unknown_structured", raw, payload: parsed };
 	} else {
 		payload = { type: "text", text: raw };
 	}
@@ -125,420 +88,155 @@ function normalizeToolUIEvent(raw: string, toolCallIndex: number, toolName?: str
 	};
 }
 
-export function createParserState(inputState: AgentState, existingToolUIEvents: ToolUIEvent[] = []): ChunkParserState {
-	return {
-		inputState: cloneState(inputState),
-		currentState: null,
-		contentBuffer: "",
-		reasoningBuffer: "",
-		pendingMessages: [],
-		pendingToolCalls: [],
-		toolUIEvents: [...existingToolUIEvents],
-		lastToolCallIndex: -1,
-		toolCallMap: {},
-		seenToolCallKeys: [],
-	};
-}
-
-function resolveToolCallStartKey(toolCallChunk: Record<string, any>): string | null {
-	if (typeof toolCallChunk?.id === "string" && toolCallChunk.id)
-		return `id:${toolCallChunk.id}`;
-	if (typeof toolCallChunk?.index === "number" && typeof toolCallChunk?.name === "string" && toolCallChunk.name)
-		return `index:${toolCallChunk.index}:${toolCallChunk.name}`;
-	if (typeof toolCallChunk?.name === "string" && toolCallChunk.name)
-		return `name:${toolCallChunk.name}:${JSON.stringify(toolCallChunk.args ?? null)}`;
-	return null;
-}
-
-function createPendingAiMessage(
-	content: string,
-	reasoning: string,
-	toolCalls: any[],
-	options: { allowToolOnly: boolean },
-): AIMessage | null {
-	if (!content && !reasoning && (!options.allowToolOnly || toolCalls.length === 0))
-		return null;
-
-	const additionalKwargs = reasoning
-		? { reasoning_content: reasoning }
-		: undefined;
-	return new AIMessage({
-		content,
-		additional_kwargs: additionalKwargs,
-		tool_calls: toolCalls.length ? [...toolCalls] : undefined,
-	});
-}
-
-/**
- * Build a serialised AI message dict suitable for `messagesUi`.
- * This mirrors the LangChain serialisation format so the UI can render
- * it identically to a persisted message.
- */
-function buildCurrentAiDict(
-	content: string,
-	reasoning: string,
-	toolCalls: any[],
-): Record<string, any> | null {
+/** Build a serialised lc:1 AI dict for `messagesUi`, mirroring the persisted format. */
+function buildCurrentAiDict(content: string, reasoning: string, toolCalls: any[]): Record<string, any> | null {
 	if (!content && !reasoning && toolCalls.length === 0) return null;
 	const kwargs: Record<string, any> = { content };
-	if (reasoning) {
-		kwargs.additional_kwargs = { reasoning_content: reasoning };
-	}
-	if (toolCalls.length > 0) {
-		kwargs.tool_calls = [...toolCalls];
-	}
-	return {
-		lc: 1,
-		type: "constructor",
-		id: ["langchain_core", "messages", "AIMessage"],
-		kwargs,
-	};
+	if (reasoning) kwargs.additional_kwargs = { reasoning_content: reasoning };
+	if (toolCalls.length > 0) kwargs.tool_calls = [...toolCalls];
+	return { lc: 1, type: "constructor", id: ["langchain_core", "messages", "AIMessage"], kwargs };
 }
 
-function shouldAppendRecoveredMessage(messages: any[], message: any): boolean {
-	const lastMessage = messages[messages.length - 1];
-	if (!lastMessage) return true;
-
-	const lastType = messageKind(lastMessage);
-	const nextType = messageKind(message);
-	if (lastType !== nextType) return true;
-
-	if (nextType === "ai") {
-		if (messageContent(lastMessage) !== messageContent(message)) return true;
-		if (messageReasoning(lastMessage) !== messageReasoning(message)) return true;
-		// Compare tool calls by IDs rather than full JSON serialization
-		const lastCalls = messageToolCalls(lastMessage);
-		const nextCalls = messageToolCalls(message);
-		if (lastCalls.length !== nextCalls.length) return true;
-		return lastCalls.some((lc: any, i: number) => lc?.id !== nextCalls[i]?.id || lc?.name !== nextCalls[i]?.name);
-	}
-
-	if (nextType === "tool") {
-		return messageContent(lastMessage) !== messageContent(message)
-			|| messageToolCallId(lastMessage) !== messageToolCallId(message);
-	}
-
-	return true;
-}
-
-function flushCurrentAiTurn(
-	parserState: ChunkParserState,
-	options: { allowToolOnly: boolean },
-): void {
-	const message = createPendingAiMessage(
-		parserState.contentBuffer,
-		parserState.reasoningBuffer,
-		parserState.pendingToolCalls,
-		options,
-	);
-	if (message) {
-		parserState.pendingMessages.push(message);
-	}
-	parserState.contentBuffer = "";
-	parserState.reasoningBuffer = "";
-	parserState.pendingToolCalls = [];
-}
-
-function resetPendingRecovery(parserState: ChunkParserState): void {
-	parserState.pendingMessages = [];
-	parserState.contentBuffer = "";
-	parserState.reasoningBuffer = "";
-	parserState.pendingToolCalls = [];
-}
-
-export function mergeState(
-	savedState: Record<string, any> | null,
-	inputMsgStr?: string,
-): { messages: BaseMessage[]; messagesUi?: UiMessage[]; compaction?: any; todos?: TodoList } {
-	let messages: BaseMessage[] = [];
-
-	/* Inject compaction summary as a leading system message so the LLM
-	   retains context from compressed turns. */
-	const compaction = savedState?.compaction ? { ...savedState.compaction } : undefined;
-	if (compaction?.summary) {
-		messages.push(new SystemMessage({
-			content: `[Conversation summary from earlier turns]\n${compaction.summary}`,
-		}));
-	}
-
-	/* Inject todos as pinned context so the LLM never loses track of its plan */
-	const todos: TodoList | undefined = savedState?.todos;
-	if (todos && todos.items.length > 0) {
-		const statusIcon = (s: string) => s === "completed" ? "✅" : s === "in_progress" ? "🔄" : "⬜";
-		const lines = todos.items.map((item) => `- ${statusIcon(item.status)} [${item.status}] ${item.content}`);
-		messages.push(new SystemMessage({
-			content: `[Current task plan]\nGoal: ${todos.goal}\n${lines.join("\n")}`,
-		}));
-	}
-
-	if (savedState?.messages && Array.isArray(savedState.messages)) {
-		messages = messages.concat(messagesFromDict(savedState.messages));
-	}
-	const humanMsg = inputMsgStr ? new HumanMessage({ content: inputMsgStr }) : null;
-	if (humanMsg) {
-		messages.push(humanMsg);
-	}
-
-	const messagesUi = Array.isArray(savedState?.messagesUi) ? [...savedState!.messagesUi] : undefined;
-	return { messages, messagesUi, compaction, todos };
-}
-
-export function buildRecoverableState(parserState: ChunkParserState): AgentState {
-	const source = cloneState(parserState.currentState ?? parserState.inputState);
-	const fallbackMessages = Array.isArray(parserState.inputState.messages) ? [...parserState.inputState.messages] : [];
-	const messages = Array.isArray(source.messages) ? [...source.messages] : fallbackMessages;
-
-	for (const message of parserState.pendingMessages) {
-		if (shouldAppendRecoveredMessage(messages, message)) {
-			messages.push(message);
-		}
-	}
-
-	const pendingAiMessage = createPendingAiMessage(
-		parserState.contentBuffer,
-		parserState.reasoningBuffer,
-		parserState.pendingToolCalls,
-		{ allowToolOnly: false },
-	);
-	if (pendingAiMessage && shouldAppendRecoveredMessage(messages, pendingAiMessage)) {
-		messages.push(pendingAiMessage);
-	}
-
-	source.messages = messages;
-	return source;
+function isErrorResult(result: string): boolean {
+	return /^Error:|^\[(子智能体执行失败|Sub-agent failed)\]|^ToolError:|"error":/i.test(result);
 }
 
 function isAbortError(error: unknown, signal?: AbortSignal): boolean {
 	if (signal?.aborted) return true;
 	if (!error || typeof error !== "object") return false;
-	const name = "name" in error ? (error as { name?: unknown }).name : undefined;
-	return name === "AbortError";
+	return "name" in error && (error as { name?: unknown }).name === "AbortError";
 }
 
-/**
- * Aggregate mutable state threaded through {@link parseChunk}.
- *
- * - `parserState`: the recovery-oriented chunk parser state.
- * - `uiBuilder`: stateful `messagesUi` builder; its methods are invoked in
- *   place (NOT returned as events) to preserve ordering.
- * - `streamReasoningBuffer`: a mutable ref box holding the *display-total*
- *   reasoning accumulator. This is separate from `parserState.reasoningBuffer`
- *   (the recovery buffer); BOTH must keep advancing across chunks.
- */
-export interface ParseDeps {
-	parserState: ChunkParserState;
-	uiBuilder: UiMessageBuilder;
-	streamReasoningBuffer: { value: string };
-}
-
-/**
- * Pure-ish transition for a single `[streamType, data]` chunk.
- *
- * Mutates `deps` in place (parser state, ui builder, reasoning ref box) and
- * returns the UI events the driver should forward to `onUiEvent`. Contains no
- * I/O, abort, or idle-timeout concerns — those stay in {@link runAgentStream}.
- *
- * Ordering note: the `uiBuilder.*` calls (pushOrUpdateAi, onToolCallStart,
- * onToolResult, onToolUiEvent) execute in their original positions and are NOT
- * turned into events; only the former `onUiEvent?.(...)` calls become
- * `events.push(...)`.
- */
-export function parseChunk(deps: ParseDeps, chunk: [string, unknown]): AgentStreamUiEvent[] {
-	const { parserState, uiBuilder, streamReasoningBuffer } = deps;
-	const [streamType, data] = chunk;
-	const events: AgentStreamUiEvent[] = [];
-
-	if (streamType === "messages") {
-		const [message] = data as [any, any];
-		const messageType = messageKind(message);
-
-		if (messageType === "ai") {
-			const reasoning = messageReasoning(message);
-			if (reasoning) {
-				const reasoningDelta = normalizeReasoningDelta(streamReasoningBuffer.value, reasoning);
-				if (reasoningDelta) {
-					streamReasoningBuffer.value += reasoningDelta;
-					parserState.reasoningBuffer += reasoningDelta;
-					events.push({
-						type: "reasoning_delta",
-						text: streamReasoningBuffer.value,
-					});
-				}
-			}
-
-			const textContent = messageContent(message);
-			if (textContent) {
-				parserState.contentBuffer += textContent;
-				events.push({
-					type: "text_delta",
-					text: textContent,
-				});
-			}
-
-			const toolCallChunks = Array.isArray(message?.tool_call_chunks) ? message.tool_call_chunks : [];
-			const newToolCallIds: string[] = [];
-			for (const toolCallChunk of toolCallChunks) {
-				if (!toolCallChunk?.name) continue;
-				const dedupeKey = resolveToolCallStartKey(toolCallChunk);
-				if (dedupeKey && parserState.seenToolCallKeys.includes(dedupeKey)) continue;
-				if (dedupeKey) parserState.seenToolCallKeys.push(dedupeKey);
-
-				parserState.lastToolCallIndex += 1;
-				parserState.pendingToolCalls.push({
-					name: toolCallChunk.name,
-					args: toolCallChunk.args,
-					id: readToolCallId(toolCallChunk) || undefined,
-				});
-				const toolCallId = readToolCallId(toolCallChunk);
-				if (toolCallId) {
-					parserState.toolCallMap[toolCallId] = {
-						index: parserState.lastToolCallIndex,
-						name: toolCallChunk.name,
-					};
-					newToolCallIds.push(toolCallId);
-				}
-				events.push({
-					type: "tool_call_start",
-					toolName: toolCallChunk.name,
-					toolCallIndex: parserState.lastToolCallIndex,
-					toolCallId: toolCallId || undefined,
-					args: toolCallChunk.args,
-				});
-			}
-
-			/* Update AI dict BEFORE creating ToolMessageUi entries
-			   so tool_calls live on the AI message in messagesUi. */
-			if (textContent || newToolCallIds.length > 0) {
-				const currentAiDict = buildCurrentAiDict(
-					parserState.contentBuffer,
-					parserState.reasoningBuffer,
-					parserState.pendingToolCalls,
-				);
-				if (currentAiDict) {
-					uiBuilder.pushOrUpdateAi(currentAiDict);
-				}
-			}
-			for (const tcId of newToolCallIds) {
-				const mapped = parserState.toolCallMap[tcId];
-				if (!mapped) continue;
-				uiBuilder.onToolCallStart(mapped.name || "unknown", tcId);
-			}
-		} else if (messageType === "tool") {
-			flushCurrentAiTurn(parserState, { allowToolOnly: true });
-			const result = typeof message.content === "string"
-				? message.content
-				: JSON.stringify(message.content);
-			parserState.pendingMessages.push(new ToolMessage({
-				content: result,
-				tool_call_id: messageToolCallId(message),
-			}));
-			const tcId = messageToolCallId(message);
-			const isError = typeof message.content === "string"
-				&& (/^Error:|^\[(子智能体执行失败|Sub-agent failed)\]|^ToolError:|"error":/i.test(message.content));
-			uiBuilder.onToolResult(tcId, isError);
-			events.push({
-				type: "tool_result",
-				toolCallId: tcId || undefined,
-				result,
-			});
-		}
-	} else if (streamType === "values") {
-		parserState.currentState = data as AgentState;
-		resetPendingRecovery(parserState);
-	} else if (streamType === "custom") {
-		const raw = typeof data === "string" ? data : JSON.stringify(data);
-
-		/* Intercept write_todos events to persist plan into state */
-		let parsed: any = null;
-		try { parsed = JSON.parse(raw); } catch { /* not JSON */ }
-		if (parsed?.__tool_type === "write_todos" && parsed.todos) {
-			const todos = parsed.todos as TodoList;
-			parserState.inputState.todos = todos;
-			if (parserState.currentState) parserState.currentState.todos = todos;
-			events.push({ type: "todos_update", todos });
-		}
-
-		const event = normalizeToolUIEvent(raw, parserState.lastToolCallIndex);
-		if (event.toolCallId && parserState.toolCallMap[event.toolCallId]) {
-			const mapped = parserState.toolCallMap[event.toolCallId];
-			event.toolCallIndex = mapped.index;
-			event.toolName = event.toolName || mapped.name;
-		}
-		parserState.toolUIEvents.push(event);
-		uiBuilder.onToolUiEvent(event);
-		events.push({
-			type: "tool_ui",
-			event,
-		});
-	}
-
-	return events;
-}
-
-interface RunAgentStreamParams {
-	agent: {
-		stream: (input: unknown, options: Record<string, any>) => Promise<AsyncIterable<[string, any]>>;
+/** Merge a saved session state with new user input into a runnable input. */
+export function mergeState(
+	savedState: Record<string, any> | null,
+	inputMsgStr?: string,
+): { messages: ModelMessage[]; messagesUi: UiMessage[]; compaction?: any; todos?: TodoList } {
+	const messages = toModelMessages(savedState?.messages ?? []);
+	if (inputMsgStr) messages.push({ role: "user", content: inputMsgStr });
+	const messagesUi = Array.isArray(savedState?.messagesUi) ? [...savedState!.messagesUi] : [];
+	return {
+		messages,
+		messagesUi,
+		compaction: savedState?.compaction ? { ...savedState.compaction } : undefined,
+		todos: savedState?.todos,
 	};
-	input: { messages: BaseMessage[]; messagesUi?: UiMessage[]; compaction?: any; todos?: TodoList };
+}
+
+/** Fold the compaction summary + pinned plan into the system prompt for this run. */
+function augmentSystem(system: string, compaction?: any, todos?: TodoList): string {
+	let out = system;
+	if (compaction?.summary) {
+		out += `\n\n[Conversation summary from earlier turns]\n${compaction.summary}`;
+	}
+	if (todos && todos.items.length > 0) {
+		const icon = (s: string) => (s === "completed" ? "✅" : s === "in_progress" ? "🔄" : "⬜");
+		const lines = todos.items.map((i) => `- ${icon(i.status)} [${i.status}] ${i.content}`);
+		out += `\n\n[Current task plan]\nGoal: ${todos.goal}\n${lines.join("\n")}`;
+	}
+	return out;
+}
+
+export interface RunAgentStreamParams {
+	model: AgentModel;
+	system: string;
+	tools: AgentToolSet;
+	providerOptions?: Record<string, Record<string, unknown>>;
+	input: { messages: ModelMessage[]; messagesUi?: UiMessage[]; compaction?: any; todos?: TodoList };
 	signal?: AbortSignal;
-	callbacks?: unknown[];
 	recursionLimit?: number;
 	existingToolUIEvents?: ToolUIEvent[];
 	onUiEvent?: (event: AgentStreamUiEvent) => void;
 }
 
 export async function runAgentStream({
-	agent,
+	model,
+	system,
+	tools,
+	providerOptions,
 	input,
 	signal,
-	callbacks,
 	recursionLimit = 100,
 	existingToolUIEvents = [],
 	onUiEvent,
 }: RunAgentStreamParams): Promise<RunAgentStreamResult> {
-	const parserState = createParserState(input as AgentState, existingToolUIEvents);
-
-	/* Initialise UI message builder from existing messagesUi or empty */
 	const uiBuilder = Array.isArray(input.messagesUi) && input.messagesUi.length > 0
 		? UiMessageBuilder.fromExisting(input.messagesUi)
 		: new UiMessageBuilder();
 
-	/* Display-total reasoning accumulator (separate from the recovery buffer
-	   parserState.reasoningBuffer); kept as a mutable ref box so parseChunk can
-	   advance it across chunks. */
-	const streamReasoningBuffer = { value: "" };
+	const toolUIEvents: ToolUIEvent[] = [...existingToolUIEvents];
+	const toolCallMap: Record<string, { index: number; name?: string }> = {};
+	let lastToolCallIndex = -1;
+	let latestTodos: TodoList | undefined;
 
-	const deps: ParseDeps = { parserState, uiBuilder, streamReasoningBuffer };
+	// Per-step accumulators (reset at each step boundary so each agent step
+	// becomes its own AI message in messagesUi).
+	let contentBuffer = "";
+	let stepReasoning = "";
+	let pendingToolCalls: any[] = [];
+	// Display-total reasoning (the reasoning_delta event carries the cumulative text).
+	let reasoningTotal = "";
+
+	const updateAiDict = () => {
+		const dict = buildCurrentAiDict(contentBuffer, stepReasoning, pendingToolCalls);
+		if (dict) uiBuilder.pushOrUpdateAi(dict);
+	};
+	const resetStep = () => {
+		contentBuffer = "";
+		stepReasoning = "";
+		pendingToolCalls = [];
+	};
+
+	// Tool custom UI events arrive here via experimental_context.emit(toolCallId, payload).
+	const emit = (toolCallId: string, payload: Record<string, unknown>) => {
+		if ((payload as any)?.__tool_type === "write_todos" && (payload as any).todos) {
+			latestTodos = (payload as any).todos as TodoList;
+			onUiEvent?.({ type: "todos_update", todos: latestTodos });
+			return;
+		}
+		const enriched = { ...payload, toolCallId };
+		const event = normalizeToolUIEvent(enriched, JSON.stringify(enriched), lastToolCallIndex);
+		const mapped = event.toolCallId ? toolCallMap[event.toolCallId] : undefined;
+		if (mapped) {
+			event.toolCallIndex = mapped.index;
+			event.toolName = event.toolName || mapped.name;
+		}
+		toolUIEvents.push(event);
+		uiBuilder.onToolUiEvent(event);
+		onUiEvent?.({ type: "tool_ui", event });
+	};
 
 	let aborted = false;
 	let error: unknown;
-
-	// Per-chunk idle timeout: if no data arrives for 120s, consider it hung
 	const IDLE_TIMEOUT_MS = 120_000;
 
-	try {
-		const stream = await agent.stream(input, {
-			streamMode: ["messages", "values", "custom"],
-			recursionLimit,
-			callbacks,
-			signal,
-		});
+	const result = streamText({
+		model,
+		system: augmentSystem(system, input.compaction, input.todos),
+		messages: input.messages,
+		tools,
+		stopWhen: stepCountIs(recursionLimit),
+		abortSignal: signal,
+		...(providerOptions ? { providerOptions } : {}),
+		experimental_context: { emit },
+	});
 
+	try {
+		// Per-part idle timeout: if no part arrives for 120s, treat the stream as hung.
 		let idleTimer: ReturnType<typeof setTimeout> | null = null;
 		const clearIdle = () => { if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; } };
-
-		const streamWithTimeout = async function* () {
-			const iter = stream[Symbol.asyncIterator]();
+		const withTimeout = async function* () {
+			const iter = result.fullStream[Symbol.asyncIterator]();
 			while (true) {
-				const chunkPromise = iter.next();
-				const timeoutPromise = new Promise<never>((_, reject) => {
+				const next = iter.next();
+				const timeout = new Promise<never>((_, reject) => {
 					idleTimer = setTimeout(() => reject(new Error("Stream idle timeout: no data received for 120s")), IDLE_TIMEOUT_MS);
 				});
 				try {
-					const result = await Promise.race([chunkPromise, timeoutPromise]);
+					const r = await Promise.race([next, timeout]);
 					clearIdle();
-					if (result.done) break;
-					yield result.value;
+					if (r.done) break;
+					yield r.value;
 				} catch (e) {
 					clearIdle();
 					throw e;
@@ -546,27 +244,89 @@ export async function runAgentStream({
 			}
 		};
 
-		for await (const [streamType, data] of streamWithTimeout()) {
-			const events = parseChunk(deps, [streamType, data]);
-			for (const e of events) onUiEvent?.(e);
+		for await (const part of withTimeout()) {
+			switch (part.type) {
+				case "reasoning-delta": {
+					const text = (part as any).text ?? "";
+					if (!text) break;
+					reasoningTotal += text;
+					stepReasoning += text;
+					onUiEvent?.({ type: "reasoning_delta", text: reasoningTotal });
+					updateAiDict();
+					break;
+				}
+				case "text-delta": {
+					const text = (part as any).text ?? "";
+					if (!text) break;
+					contentBuffer += text;
+					onUiEvent?.({ type: "text_delta", text });
+					updateAiDict();
+					break;
+				}
+				case "tool-call": {
+					const tc = part as any;
+					lastToolCallIndex += 1;
+					pendingToolCalls.push({ id: tc.toolCallId, name: tc.toolName, args: tc.input });
+					toolCallMap[tc.toolCallId] = { index: lastToolCallIndex, name: tc.toolName };
+					onUiEvent?.({
+						type: "tool_call_start",
+						toolName: tc.toolName,
+						toolCallIndex: lastToolCallIndex,
+						toolCallId: tc.toolCallId,
+						args: tc.input,
+					});
+					updateAiDict();
+					uiBuilder.onToolCallStart(tc.toolName, tc.toolCallId);
+					break;
+				}
+				case "tool-result": {
+					const tc = part as any;
+					const out = typeof tc.output === "string" ? tc.output : JSON.stringify(tc.output);
+					uiBuilder.onToolResult(tc.toolCallId, isErrorResult(out));
+					onUiEvent?.({ type: "tool_result", toolCallId: tc.toolCallId, result: out });
+					resetStep();
+					break;
+				}
+				case "tool-error": {
+					const tc = part as any;
+					const msg = tc.error instanceof Error ? tc.error.message : String(tc.error);
+					uiBuilder.onToolResult(tc.toolCallId, true);
+					onUiEvent?.({ type: "tool_result", toolCallId: tc.toolCallId, result: msg });
+					resetStep();
+					break;
+				}
+				case "finish-step":
+					resetStep();
+					break;
+				case "abort":
+					aborted = true;
+					break;
+				case "error":
+					error = (part as any).error;
+					break;
+				default:
+					break;
+			}
 		}
 	} catch (err) {
 		aborted = isAbortError(err, signal);
-		if (!aborted) {
-			error = err;
-		}
+		if (!aborted) error = err;
 	}
 
-	const lastState = buildRecoverableState(parserState);
-	lastState.toolUIEvents = [...parserState.toolUIEvents];
-	lastState.messagesUi = uiBuilder.finalise();
-	lastState.compaction = (input as AgentState).compaction;
-	lastState.todos = parserState.currentState?.todos ?? parserState.inputState.todos ?? (input as AgentState).todos;
+	// LLM-context messages: previous context + this turn's response messages.
+	let responseMessages: ModelMessage[] = [];
+	try {
+		responseMessages = ((await result.response).messages as ModelMessage[]) ?? [];
+	} catch {
+		// Aborted/failed before a full response — keep prior context only.
+	}
 
-	return {
-		lastState,
-		aborted,
-		completed: !aborted && !error,
-		error,
-	};
+	const lastState: AgentState = {};
+	lastState.messages = [...input.messages, ...responseMessages];
+	lastState.messagesUi = uiBuilder.finalise();
+	lastState.toolUIEvents = toolUIEvents;
+	lastState.compaction = input.compaction;
+	lastState.todos = latestTodos ?? input.todos;
+
+	return { lastState, aborted, completed: !aborted && !error, error };
 }

@@ -1,7 +1,7 @@
-import { HumanMessage } from "@langchain/core/messages";
+import { generateText } from "ai";
 import type { AgentModel } from "./agent-types";
 import type { AgentState, CompactionState } from "../types";
-import { messageKind, messageContent } from "./message-shape";
+import { messageKind, messageContent, messageToolCalls } from "./message-shape";
 
 const COMPACT_SUMMARY_PROMPT = `You are a conversation summariser for a note-taking AI assistant.
 Below is the existing summary (if any) followed by new conversation turns.
@@ -34,8 +34,8 @@ function charCount(messages: any[]): number {
 	let total = 0;
 	for (const m of messages) {
 		total += messageContent(m).length;
-		const tc = m?.kwargs?.tool_calls ?? m?.tool_calls;
-		if (Array.isArray(tc)) {
+		const tc = messageToolCalls(m);
+		if (tc.length) {
 			total += JSON.stringify(tc).length;
 		}
 	}
@@ -70,8 +70,8 @@ function turnsToText(turns: any[][]): string {
 			if (t === "human" || t === "user") {
 				lines.push(`User: ${c}`);
 			} else if (t === "ai") {
-				const tc = m?.kwargs?.tool_calls ?? m?.tool_calls;
-				if (Array.isArray(tc) && tc.length > 0) {
+				const tc = messageToolCalls(m);
+				if (tc.length > 0) {
 					const names = tc.map((t: any) => t.name || "?").join(", ");
 					lines.push(`Assistant: ${c || "(tool calls)"} [tools: ${names}]`);
 				} else if (c) {
@@ -133,10 +133,7 @@ export async function compactMessages(
 		prompt += `\n\nAdditional user instruction for this summary: ${options.requirement}`;
 	}
 
-	const result = await options.model.invoke([new HumanMessage(prompt)]);
-	const summary = typeof result.content === "string"
-		? result.content
-		: JSON.stringify(result.content);
+	const { text: summary } = await generateText({ model: options.model, prompt });
 
 	/* Rebuild state.messages: keep only recent turns */
 	state.messages = recentTurns.flat();

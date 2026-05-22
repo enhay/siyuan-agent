@@ -55,11 +55,8 @@
     "@ai-sdk/mcp": "^1.0.43",
     "@ai-sdk/openai": "^3.0.65",
     "@ai-sdk/openai-compatible": "^2.0.47",
-    "@langchain/core": "^1.1.22",
-    "@langchain/openai": "^1.2.7",
     "ai": "^6.0.190",
     "cron-parser": "^5.5.0",
-    "langchain": "^1.2.21",
     "zod": "^4.3.6"
   }
 }

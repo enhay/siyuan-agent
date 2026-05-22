@@ -1,22 +1,18 @@
 /**
- * message-shape — the single seam that knows how LangChain messages are wire-encoded.
+ * message-shape — the single seam that knows how messages are wire-encoded.
  *
- * A message can arrive in three wire formats:
- *   1. `lc:1` constructor dict: `{ lc:1, type:"constructor", id:[...,"AIMessage"], kwargs:{...} }`
- *   2. simplified dict: `{ type:"ai"|"human"|"tool"|... , content, ... }`
- *   3. a live `BaseMessage` instance (has `_getType()`).
+ * Two shapes coexist after the AI SDK migration:
+ *   - `messagesUi` entries: `lc:1` constructor dicts (plain JSON, NOT LangChain
+ *     instances) and `ToolMessageUi` — the persisted/rendered UI track.
+ *   - `state.messages` entries: AI SDK `ModelMessage` (role + string|parts) —
+ *     the LLM context track fed to `streamText`/`generateText`.
  *
- * Every consumer reads messages through these accessors. A LangChain upgrade
- * touches this file only.
+ * Every consumer reads messages through these accessors, which transparently
+ * handle lc:1 dicts, simplified `{type|role, content}` dicts, and ModelMessage
+ * (string content or a `parts` array). A wire-format change touches this file.
  */
 
-import {
-	AIMessage,
-	HumanMessage,
-	SystemMessage,
-	ToolMessage,
-	type BaseMessage,
-} from "@langchain/core/messages";
+import type { ModelMessage } from "ai";
 
 export type MessageKind = "human" | "ai" | "system" | "tool" | "";
 
@@ -25,12 +21,14 @@ export function genId(): string {
 	return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-/** Any wire format → canonical kind. AIMessageChunk normalises to "ai". */
+/** Content parts of a ModelMessage, or [] for string/scalar content. */
+function contentParts(message: any): any[] {
+	const content = message?.kwargs?.content ?? message?.content;
+	return Array.isArray(content) ? content : [];
+}
+
+/** Any wire format → canonical kind. */
 export function messageKind(message: any): MessageKind {
-	if (typeof message?._getType === "function") {
-		const t = message._getType();
-		return t === "AIMessageChunk" ? "ai" : (t as MessageKind);
-	}
 	if (message?.lc === 1 && Array.isArray(message.id)) {
 		const className = message.id[message.id.length - 1] as string;
 		if (className === "HumanMessage") return "human";
@@ -45,73 +43,106 @@ export function messageKind(message: any): MessageKind {
 	return "";
 }
 
-/** Text content; non-string content (incl. missing) → "". */
+/** Text content; joins text parts of a ModelMessage; "" if none. */
 export function messageContent(message: any): string {
 	const content = message?.kwargs?.content ?? message?.content;
-	return typeof content === "string" ? content : "";
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		return content
+			.filter((p) => p?.type === "text" && typeof p.text === "string")
+			.map((p) => p.text)
+			.join("");
+	}
+	return "";
 }
 
 /**
- * DeepSeek chain-of-thought reasoning_content; "" if absent.
- *
- * Union of every fallback path used across the codebase:
- *   - kwargs.additional_kwargs.reasoning_content        (stream-runtime / reasoning.ts)
- *   - additional_kwargs.reasoning_content               (stream-runtime / reasoning.ts)
- *   - kwargs.lc_kwargs.additional_kwargs.reasoning_content   (chat-helpers — persisted render)
- *   - lc_kwargs.additional_kwargs.reasoning_content          (chat-helpers — persisted render)
+ * Chain-of-thought reasoning; "" if absent. Handles:
+ *   - lc:1 dict additional_kwargs.reasoning_content (UI track)
+ *   - lc_kwargs.additional_kwargs.reasoning_content (persisted render)
+ *   - ModelMessage `reasoning` content part (LLM track)
  */
 export function messageReasoning(message: any): string {
 	const reasoning = message?.kwargs?.additional_kwargs?.reasoning_content
 		?? message?.additional_kwargs?.reasoning_content
 		?? message?.kwargs?.lc_kwargs?.additional_kwargs?.reasoning_content
 		?? message?.lc_kwargs?.additional_kwargs?.reasoning_content;
-	return typeof reasoning === "string" ? reasoning : "";
+	if (typeof reasoning === "string") return reasoning;
+	const part = contentParts(message).find((p) => p?.type === "reasoning" && typeof p.text === "string");
+	return part ? part.text : "";
 }
 
-/** ToolMessage's tool_call_id; "" if absent. */
+/** ToolMessage's tool_call_id; reads a ModelMessage tool-result part too. */
 export function messageToolCallId(message: any): string {
 	const id = message?.kwargs?.tool_call_id ?? message?.tool_call_id;
-	return typeof id === "string" ? id : "";
+	if (typeof id === "string") return id;
+	const part = contentParts(message).find((p) => p?.type === "tool-result" && typeof p.toolCallId === "string");
+	return part ? part.toolCallId : "";
 }
 
-/** tool_calls array on an AI message; [] if absent. */
+/**
+ * tool_calls on an AI message, normalised to `{ id, name, args }[]`.
+ * Reads lc:1 dicts and ModelMessage `tool-call` content parts.
+ */
 export function messageToolCalls(message: any): any[] {
 	const toolCalls = message?.kwargs?.tool_calls ?? message?.tool_calls;
-	return Array.isArray(toolCalls) ? toolCalls : [];
+	if (Array.isArray(toolCalls)) return toolCalls;
+	const parts = contentParts(message).filter((p) => p?.type === "tool-call");
+	return parts.map((p) => ({ id: p.toolCallId, name: p.toolName, args: p.input }));
 }
 
 /** A single tool_call / tool_call_chunk's id; "" if absent. */
 export function toolCallId(raw: any): string {
-	const id = raw?.id ?? raw?.tool_call_id;
+	const id = raw?.id ?? raw?.tool_call_id ?? raw?.toolCallId;
 	return typeof id === "string" ? id : "";
 }
 
-/** Dict → live BaseMessage (deserialisation). */
-export function messageFromDict(raw: Record<string, any>): BaseMessage {
-	if (raw.lc === 1 && raw.type === "constructor" && Array.isArray(raw.id)) {
-		const className = raw.id[raw.id.length - 1] as string;
-		const kwargs = raw.kwargs ?? {};
-		if (className === "HumanMessage") return new HumanMessage(kwargs);
-		if (className === "AIMessage") return new AIMessage(kwargs);
-		if (className === "AIMessageChunk") return new AIMessage(kwargs);
-		if (className === "SystemMessage") return new SystemMessage(kwargs);
-		if (className === "ToolMessage") return new ToolMessage({ tool_call_id: "", ...kwargs });
-		throw new Error(`Unknown LangChain message class: ${className}`);
+/**
+ * Convert persisted messages to AI SDK `ModelMessage[]` for the LLM context.
+ *
+ * New sessions persist `state.messages` as ModelMessage already (passed through);
+ * lc:1 / simplified dicts from older sessions are converted best-effort.
+ */
+export function toModelMessages(messages: any[]): ModelMessage[] {
+	const out: ModelMessage[] = [];
+	for (const m of messages || []) {
+		// Already a ModelMessage (has a role and no lc:1 marker) → pass through.
+		if (m?.role && m?.lc !== 1 && !Array.isArray(m?.id)) {
+			out.push(m as ModelMessage);
+			continue;
+		}
+		const kind = messageKind(m);
+		const text = messageContent(m);
+		if (kind === "human") {
+			out.push({ role: "user", content: text });
+		} else if (kind === "system") {
+			out.push({ role: "system", content: text });
+		} else if (kind === "ai") {
+			const reasoning = messageReasoning(m);
+			const calls = messageToolCalls(m);
+			const parts: any[] = [];
+			if (reasoning) parts.push({ type: "reasoning", text: reasoning });
+			if (text) parts.push({ type: "text", text });
+			for (const tc of calls) {
+				parts.push({ type: "tool-call", toolCallId: toolCallId(tc), toolName: tc.name, input: tc.args });
+			}
+			out.push({ role: "assistant", content: parts.length ? parts : text });
+		} else if (kind === "tool") {
+			out.push({
+				role: "tool",
+				content: [{
+					type: "tool-result",
+					toolCallId: messageToolCallId(m),
+					toolName: m?.name ?? m?.kwargs?.name ?? "",
+					output: { type: "text", value: text },
+				}],
+			});
+		}
 	}
-
-	const { type, ...rest } = raw;
-	if (type === "human" || type === "user") return new HumanMessage(rest);
-	if (type === "ai" || type === "assistant") return new AIMessage(rest);
-	if (type === "system") return new SystemMessage(rest);
-	if (type === "tool") return new ToolMessage({ tool_call_id: "", ...rest });
-	throw new Error(`Unknown message type: ${type}`);
+	return out;
 }
 
-export function messagesFromDict(messages: Record<string, any>[]): BaseMessage[] {
-	return messages.map(messageFromDict);
-}
-
-/* ── Writers ───────────────────────────────────────────────────────────── */
+/* ── Writers (lc:1 UI-track dicts) ─────────────────────────────────────── */
 
 export function setMessageContent(raw: Record<string, any>, content: string): void {
 	if (raw.kwargs && "content" in raw.kwargs) {

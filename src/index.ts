@@ -21,7 +21,7 @@ import { createTitleProvider } from "./core/session-sync/adapters/title-provider
 import { createFsSource } from "./core/session-sync/adapters/fs-source";
 import { getNodeRequire } from "./core/session-sync/node-require";
 import type { SyncRunner } from "./core/session-sync/manager";
-import { createChatModel } from "./core/chat-model";
+import { createModel, reasoningProviderOptions } from "./core/model";
 import { McpManager } from "./core/mcp-client";
 import { createTranslator, type Translator } from "./i18n";
 
@@ -239,8 +239,8 @@ export default class SiYuanAgent extends Plugin {
 				// reasoningEffort "off": a 16-char title needs no chain-of-thought, and
 				// leaving it on makes reasoning models (e.g. deepseek-v4) burn the token
 				// budget on reasoning_content → empty title → heuristic fallback.
-				const model = createChatModel(resolveModelConfig(this.getConfig(), ss.aiTitle.modelId), { reasoningEffort: "off" });
-				titleProvider = createTitleProvider(model as unknown as Parameters<typeof createTitleProvider>[0]);
+				const titleMc = resolveModelConfig(this.getConfig(), ss.aiTitle.modelId);
+				titleProvider = createTitleProvider(createModel(titleMc), reasoningProviderOptions("off", titleMc));
 			} catch {
 				titleProvider = undefined; // model unavailable → heuristic titles
 			}

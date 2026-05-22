@@ -96,19 +96,6 @@ export interface ToolUIEvent {
 	payload: ToolUIEventPayload;
 }
 
-export interface ChunkParserState {
-	inputState: AgentState;
-	currentState: AgentState | null;
-	contentBuffer: string;
-	reasoningBuffer: string;
-	pendingMessages: any[];
-	pendingToolCalls: any[];
-	toolUIEvents: ToolUIEvent[];
-	lastToolCallIndex: number;
-	toolCallMap: Record<string, { index: number; name?: string }>;
-	seenToolCallKeys: string[];
-}
-
 export type AgentStreamUiEvent =
 	| {
 		type: "text_delta";
