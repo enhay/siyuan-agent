@@ -51,9 +51,10 @@ async function resolveTitle(
 	}
 	// Seed the model with the first *substantive* user message (same basis as the
 	// heuristic). No real content → skip the model entirely, so it can't echo the
-	// instruction back as a junk title.
+	// instruction back as a junk title. Sub-agents stay heuristic: their title is
+	// only inline link text in the parent, not worth an LLM call (×~1200 on backfill).
 	const seed = firstSubstantiveUserMessage(session);
-	if (deps.aiTitleEnabled && deps.titleProvider && seed) {
+	if (deps.aiTitleEnabled && deps.titleProvider && seed && !session.isSubAgent) {
 		const ai = await deps.titleProvider
 			.generate({ title: inferTitle(session), firstUserMessage: seed })
 			.catch(() => undefined);
