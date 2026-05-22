@@ -54,6 +54,17 @@ function refAnchor(title: string): string {
 	return title.replace(/"/g, "'").replace(/[\r\n]+/g, " ").trim();
 }
 
+/** Detect a real cross-tool CLI invocation (codex↔claude) in a shell summary.
+ *  Excludes help/version/which and path noise (e.g. a `claude-code` directory). */
+function crossToolCmd(summary: string, other: "codex" | "claude"): string | null {
+	const m = summary.match(/`([^`]+)`/);
+	const cmd = (m ? m[1] : summary).trim();
+	if (new RegExp(`${other}-code|/${other}(?:-|/|\\b)`, "i").test(cmd)) return null; // path noise
+	if (/--help|--version|\bwhich\b|\bman\b/i.test(cmd)) return null;
+	if (!new RegExp(`\\b${other}\\b\\s+(exec|chat|run|review|-p\\b|--print|--prompt|["'])`, "i").test(cmd)) return null;
+	return cmd.replace(/`/g, "'");
+}
+
 function oneLine(text: string, max: number): string {
 	const t = text.replace(/\s+/g, " ").trim();
 	return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
@@ -121,8 +132,16 @@ export function renderSession(session: NormalizedSession, options: RenderOptions
 	lines.push("## 💬 对话", "");
 	type Item =
 		| { ts: string; kind: "msg"; role: "user" | "assistant"; text: string }
-		| { ts: string; kind: "sub"; docId: string; label: string };
+		| { ts: string; kind: "sub"; docId: string; label: string }
+		| { ts: string; kind: "xtool"; other: string; cmd: string };
 	const items: Item[] = turns.map((m) => ({ ts: m.ts ?? "", kind: "msg", role: m.role, text: m.text }));
+	// Cross-tool CLI invocations (codex↔claude) inlined as notes at call time.
+	const otherTool = session.source === "codex" ? "claude" : "codex";
+	for (const t of session.toolActivities) {
+		if (t.kind !== "shell") continue;
+		const cmd = crossToolCmd(t.summary, otherTool);
+		if (cmd) items.push({ ts: t.timestamp ?? "", kind: "xtool", other: otherTool, cmd });
+	}
 	const subLabelCounts = new Map<string, number>();
 	for (const s of subs) {
 		const base = s.nickname ? `${s.role ?? "agent"} · ${s.nickname}` : s.role ?? "agent";
@@ -142,6 +161,11 @@ export function renderSession(session: NormalizedSession, options: RenderOptions
 			if (it.kind === "sub") {
 				lines.push(`> 🧩 **子代理** ((${it.docId} "${refAnchor(it.label)}"))`, "");
 				prevRole = null; // a marker breaks any role grouping
+				continue;
+			}
+			if (it.kind === "xtool") {
+				lines.push(`> ↗ **调用 ${it.other}**：\`${it.cmd}\``, "");
+				prevRole = null;
 				continue;
 			}
 			if (it.role === "user") {

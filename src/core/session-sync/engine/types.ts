@@ -76,6 +76,9 @@ export interface SessionRecord {
 	lastWrittenAt?: string;
 	/** Parent doc id this child has been moved under (idempotency for aggregation). */
 	movedUnderParent?: string;
+	/** Parent doc id this child has a back-link block to (idempotency). Reset on
+	 *  overwrite since clearing children wipes the prepended back-link. */
+	backLinkedTo?: string;
 }
 
 export interface SyncState {

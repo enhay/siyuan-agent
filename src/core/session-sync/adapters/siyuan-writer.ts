@@ -80,6 +80,13 @@ export function createSiyuanWriter(k: SiyuanKernel = defaultKernel): SiyuanWrite
 			}
 		},
 
+		async prependBacklink({ childDocId, parentDocId, parentTitle }) {
+			const anchor = parentTitle.replace(/"/g, "'").replace(/[\r\n]+/g, " ").trim();
+			await withRetry(() =>
+				k.blocks.prepend({ data: `> ↑ **父会话** ((${parentDocId} "${anchor}"))`, parentID: childDocId }),
+			);
+		},
+
 		async findDocBySessionKey(sessionKey) {
 			const rows = await k.sql<IdRow>(
 				`SELECT id FROM blocks WHERE type='d' AND ial LIKE '%custom-ai-session-key="${escapeIalLike(sessionKey)}"%' ESCAPE '\\' LIMIT 1`,

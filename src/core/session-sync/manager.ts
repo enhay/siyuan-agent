@@ -46,6 +46,7 @@ export class SessionSyncManager {
 	private lastSignature: string | null = null;
 	private status: SyncStatus = { state: "idle", running: false };
 	private runStartedAt = 0;
+	private currentIntervalMs = 0;
 
 	constructor(private readonly deps: SessionSyncManagerDeps) {}
 
@@ -55,9 +56,9 @@ export class SessionSyncManager {
 
 	start(): void {
 		if (this.timer) return;
-		const intervalMs = Math.max(15, this.deps.getConfig().pollIntervalSec) * 1000;
+		this.currentIntervalMs = Math.max(15, this.deps.getConfig().pollIntervalSec) * 1000;
 		const set = this.deps.setTimer ?? ((fn, ms) => setInterval(fn, ms));
-		this.timer = set(() => void this.tick(), intervalMs);
+		this.timer = set(() => void this.tick(), this.currentIntervalMs);
 		void this.tick(); // run once immediately
 	}
 
@@ -87,6 +88,14 @@ export class SessionSyncManager {
 	}
 
 	private async tick(force = false): Promise<ReconcileResult | undefined> {
+		// Hot-apply a changed poll interval (no restart wiring needed).
+		if (!force && this.timer) {
+			const wantMs = Math.max(15, this.deps.getConfig().pollIntervalSec) * 1000;
+			if (wantMs !== this.currentIntervalMs) {
+				this.restart();
+				return undefined;
+			}
+		}
 		if (this.status.running) {
 			const elapsed = this.now() - this.runStartedAt;
 			if (elapsed < STALE_RUN_MS) return undefined; // genuinely busy

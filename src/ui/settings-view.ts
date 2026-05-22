@@ -411,9 +411,12 @@ export class SettingsView {
 				},
 			},
 		};
+		const justEnabledSync = !currentConfig.sessionSync?.enabled && nextConfig.sessionSync?.enabled;
 		this.ctx.plugin.data[CONFIG_STORAGE] = nextConfig;
 		await this.ctx.plugin.saveData(CONFIG_STORAGE, nextConfig);
 		await this.ctx.host.onConfigSaved(nextConfig);
+		// Validate source paths when the user turns sync on, so a wrong path is caught early.
+		if (justEnabledSync) void this.ctx.host.testSessionSyncPaths();
 		this.draft = {
 			...draft,
 			customInstructions: nextConfig.customInstructions,

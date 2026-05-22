@@ -43,6 +43,8 @@ export interface SiyuanWriter {
 	moveUnder(input: { childIds: string[]; parentDocId: string }): Promise<void>;
 	/** Collapse (fold) top-level headings whose text starts with one of the prefixes. */
 	foldHeadings(input: { docId: string; headingPrefixes: string[] }): Promise<void>;
+	/** Prepend a back-link block (to the parent doc) at the top of a child doc. */
+	prependBacklink(input: { childDocId: string; parentDocId: string; parentTitle: string }): Promise<void>;
 	/** Look up a doc id by `custom-ai-session-key` for state-loss recovery. */
 	findDocBySessionKey(sessionKey: string): Promise<string | undefined>;
 	/** Whether a doc id still exists (user may have deleted it). */

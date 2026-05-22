@@ -15,7 +15,7 @@ import { parseClaudeSession } from "./parse/claude";
 import { renderSession, FOLDABLE_HEADING_PREFIXES } from "./render";
 import { buildSiyuanAttrs, buildSiyuanDocPath, contentHash, fileKey, inferTitle, sessionKey } from "./identity";
 import { inferStatus } from "./status";
-import { collectChildLinks, pendingChildMoves, type ChildLink } from "./aggregate";
+import { collectChildLinks, pendingChildMoves, pendingBacklinks, type ChildLink } from "./aggregate";
 
 export interface ReconcileDeps {
 	files: FileSource;
@@ -226,6 +226,17 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 			if (rec) rec.movedUnderParent = move.parentDocId;
 		} catch (err) {
 			result.errors.push(`failed to nest ${move.childSessionKey}: ${err}`);
+		}
+	}
+
+	// 4. Back-link each child to its parent doc (idempotent via backLinkedTo).
+	for (const link of pendingBacklinks(state)) {
+		try {
+			await deps.writer.prependBacklink({ childDocId: link.childDocId, parentDocId: link.parentDocId, parentTitle: link.parentTitle });
+			const rec = state.sessions[link.childSessionKey];
+			if (rec) rec.backLinkedTo = link.parentDocId;
+		} catch (err) {
+			result.errors.push(`failed to back-link ${link.childSessionKey}: ${err}`);
 		}
 	}
 

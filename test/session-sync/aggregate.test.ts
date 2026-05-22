@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { reconcileOnce } from "../../src/core/session-sync/engine/reconcile";
-import { collectChildLinks, pendingChildMoves } from "../../src/core/session-sync/engine/aggregate";
+import { collectChildLinks, pendingChildMoves, pendingBacklinks } from "../../src/core/session-sync/engine/aggregate";
 import type { DiscoveredFile, FileSource, SiyuanWriter, StateStore } from "../../src/core/session-sync/engine/ports";
 import type { SyncState } from "../../src/core/session-sync/engine/types";
 
@@ -40,6 +40,7 @@ class FakeWriter implements SiyuanWriter {
 		this.moves.push(input);
 	}
 	async foldHeadings() {}
+	async prependBacklink() {}
 	async findDocBySessionKey(k: string) {
 		const id = this.byKey.get(k);
 		return id && this.docs.get(id)?.exists ? id : undefined;
@@ -86,6 +87,14 @@ describe("aggregate helpers", () => {
 		expect(pendingChildMoves(nested).map((m) => m.childDocId)).toEqual(["c2"]);
 		const orphan: SyncState = { files: {}, sessions: { "codex:w9": { target: "siyuan", docId: "c9", sessionId: "w9", source: "codex", parentSessionId: "nope" } } };
 		expect(pendingChildMoves(orphan)).toEqual([]);
+	});
+
+	it("pendingBacklinks returns children needing a back-link, skips already-linked", () => {
+		const links = pendingBacklinks(state);
+		expect(links.map((l) => l.childDocId).sort()).toEqual(["c1", "c2"]);
+		expect(links[0]).toMatchObject({ parentDocId: "pdoc" });
+		const linked: SyncState = { files: {}, sessions: { ...state.sessions, "codex:w1": { ...state.sessions["codex:w1"], backLinkedTo: "pdoc" } } };
+		expect(pendingBacklinks(linked).map((l) => l.childDocId)).toEqual(["c2"]);
 	});
 });
 

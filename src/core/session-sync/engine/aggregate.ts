@@ -49,6 +49,33 @@ export interface PendingMove {
 	childSessionKey: string;
 }
 
+export interface PendingBacklink {
+	childDocId: string;
+	childSessionKey: string;
+	parentDocId: string;
+	parentTitle: string;
+}
+
+/** Children whose parent doc exists but which don't yet have a back-link block to
+ *  it (or it points at a stale parent). Caller prepends the link and marks
+ *  `backLinkedTo`. */
+export function pendingBacklinks(state: SyncState): PendingBacklink[] {
+	const out: PendingBacklink[] = [];
+	for (const rec of Object.values(state.sessions)) {
+		if (!rec.docId || !rec.parentSessionId || !rec.source) continue;
+		const parent = state.sessions[parentSessionKey(rec.source, rec.parentSessionId)];
+		if (!parent?.docId) continue;
+		if (rec.backLinkedTo === parent.docId) continue;
+		out.push({
+			childDocId: rec.docId,
+			childSessionKey: sessionKey({ source: rec.source, sessionId: rec.sessionId ?? "" }),
+			parentDocId: parent.docId,
+			parentTitle: parent.title || parent.sessionId || parent.docId,
+		});
+	}
+	return out;
+}
+
 /** Children whose parent doc now exists but which haven't been moved under it yet
  *  (or were moved under a different parent). Caller performs the moves and marks
  *  `movedUnderParent` so this stays idempotent. */

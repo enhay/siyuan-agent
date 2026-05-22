@@ -119,6 +119,21 @@ describe("renderSession readability", () => {
 		const md = renderSession(session());
 		expect(md).not.toContain("🧩");
 	});
+
+	it("inlines a cross-tool invocation note (codex→claude), ignoring noise", () => {
+		const md = renderSession(
+			session({
+				toolActivities: [
+					{ kind: "shell", summary: "`which claude` → exit 0", timestamp: "2026-05-01T10:00:01Z", status: "success" },
+					{ kind: "shell", summary: "`claude -p \"do the work\"` → exit 0", timestamp: "2026-05-01T10:00:02Z", status: "success" },
+					{ kind: "shell", summary: "`grep claude-code/src` → exit 0", timestamp: "2026-05-01T10:00:03Z", status: "success" },
+				],
+			}),
+		);
+		expect(md).toContain("↗ **调用 claude**");
+		expect(md).toContain('claude -p "do the work"');
+		expect((md.match(/↗ \*\*调用/g) || []).length).toBe(1); // which/path noise excluded
+	});
 });
 
 describe("cleanMessageText", () => {
