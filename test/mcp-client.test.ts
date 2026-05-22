@@ -53,10 +53,10 @@ describe("mcpToolsToLangChain", () => {
 
 		const tools = mcpToolsToLangChain(client, toolDefs);
 		expect(tools).toHaveLength(2);
-		expect(tools[0].name).toBe("mcp_srv1_search_web");
+		expect((tools[0] as any).__toolName).toBe("mcp_srv1_search_web");
 		expect(tools[0].description).toContain("[MCP: Test]");
 		expect(tools[0].description).toContain("Search the web");
-		expect(tools[1].name).toBe("mcp_srv1_get_weather");
+		expect((tools[1] as any).__toolName).toBe("mcp_srv1_get_weather");
 	});
 
 	it("handles tools with no inputSchema", () => {
@@ -69,7 +69,7 @@ describe("mcpToolsToLangChain", () => {
 
 		const tools = mcpToolsToLangChain(client, [{ name: "ping" }]);
 		expect(tools).toHaveLength(1);
-		expect(tools[0].name).toBe("mcp_srv1_ping");
+		expect((tools[0] as any).__toolName).toBe("mcp_srv1_ping");
 	});
 });
 

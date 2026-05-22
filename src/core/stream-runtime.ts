@@ -188,15 +188,15 @@ export async function runAgentStream({
 	};
 
 	// Tool custom UI events arrive here via experimental_context.emit(toolCallId, payload).
-	const emit = (toolCallId: string, payload: Record<string, unknown>) => {
-		if ((payload as any)?.__tool_type === "write_todos" && (payload as any).todos) {
-			latestTodos = (payload as any).todos as TodoList;
-			onUiEvent?.({ type: "todos_update", todos: latestTodos });
-			return;
-		}
+	// streamText runs tool execute() eagerly, so an emit can fire BEFORE this loop
+	// has processed the matching `tool-call` part. Buffer such early emits and flush
+	// them once the tool call is registered (so they bind to the right card).
+	const pendingEmits: Record<string, Array<Record<string, unknown>>> = {};
+
+	const flushToolEvent = (toolCallId: string, payload: Record<string, unknown>) => {
 		const enriched = { ...payload, toolCallId };
 		const event = normalizeToolUIEvent(enriched, JSON.stringify(enriched), lastToolCallIndex);
-		const mapped = event.toolCallId ? toolCallMap[event.toolCallId] : undefined;
+		const mapped = toolCallMap[toolCallId];
 		if (mapped) {
 			event.toolCallIndex = mapped.index;
 			event.toolName = event.toolName || mapped.name;
@@ -204,6 +204,19 @@ export async function runAgentStream({
 		toolUIEvents.push(event);
 		uiBuilder.onToolUiEvent(event);
 		onUiEvent?.({ type: "tool_ui", event });
+	};
+
+	const emit = (toolCallId: string, payload: Record<string, unknown>) => {
+		if ((payload as any)?.__tool_type === "write_todos" && (payload as any).todos) {
+			latestTodos = (payload as any).todos as TodoList;
+			onUiEvent?.({ type: "todos_update", todos: latestTodos });
+			return;
+		}
+		if (toolCallMap[toolCallId]) {
+			flushToolEvent(toolCallId, payload);
+		} else {
+			(pendingEmits[toolCallId] ??= []).push(payload);
+		}
 	};
 
 	let aborted = false;
@@ -277,6 +290,12 @@ export async function runAgentStream({
 					});
 					updateAiDict();
 					uiBuilder.onToolCallStart(tc.toolName, tc.toolCallId);
+					// Flush any tool UI events that executed before this part arrived.
+					const buffered = pendingEmits[tc.toolCallId];
+					if (buffered) {
+						delete pendingEmits[tc.toolCallId];
+						for (const p of buffered) flushToolEvent(tc.toolCallId, p);
+					}
 					break;
 				}
 				case "tool-result": {
@@ -311,6 +330,11 @@ export async function runAgentStream({
 	} catch (err) {
 		aborted = isAbortError(err, signal);
 		if (!aborted) error = err;
+	}
+
+	// Flush any tool UI events whose `tool-call` part never arrived (best-effort).
+	for (const [id, payloads] of Object.entries(pendingEmits)) {
+		for (const p of payloads) flushToolEvent(id, p);
 	}
 
 	// LLM-context messages: previous context + this turn's response messages.

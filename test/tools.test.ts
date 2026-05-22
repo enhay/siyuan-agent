@@ -16,6 +16,9 @@ const mockFetchResponse = (data: any, code = 0) => ({
 	json: () => Promise.resolve({ code, data, msg: code !== 0 ? "error" : "" }),
 });
 
+/** Run an AI SDK tool's execute with a minimal call context (no UI sink). */
+const runTool = (tool: any, args: any) => tool.execute(args, { toolCallId: "test" });
+
 beforeEach(() => {
 	vi.restoreAllMocks();
 	hoisted.confirmApprove = true;
@@ -29,7 +32,7 @@ describe("tool definitions", () => {
 			model: "model",
 			customInstructions: "",
 		}));
-		const names = tools.map(t => t.name);
+		const names = tools.map(t => (t as any).__toolName);
 		expect(new Set(names).size).toBe(names.length);
 	});
 
@@ -47,20 +50,20 @@ describe("tool definitions", () => {
 	});
 
 	it("lookup tools are a subset of default tools", () => {
-		const lookupNames = getLookupTools().map(t => t.name);
+		const lookupNames = getLookupTools().map(t => (t as any).__toolName);
 		const defaultNames = getDefaultTools(() => ({
 			apiBaseURL: "https://example.com/v1",
 			apiKey: "key",
 			model: "model",
 			customInstructions: "",
-		})).map(t => t.name);
+		})).map(t => (t as any).__toolName);
 		for (const name of lookupNames) {
 			expect(defaultNames).toContain(name);
 		}
 	});
 
 	it("lookup tools only contain read-only tools", () => {
-		const lookupNames = getLookupTools().map(t => t.name);
+		const lookupNames = getLookupTools().map(t => (t as any).__toolName);
 		const writeTools = ["edit_blocks", "append_block", "create_document", "move_document", "rename_document", "delete_document", "toggle_todo"];
 		for (const name of writeTools) {
 			expect(lookupNames).not.toContain(name);
@@ -73,7 +76,7 @@ describe("tool definitions", () => {
 			apiKey: "key",
 			model: "model",
 			customInstructions: "",
-		})).map(t => t.name);
+		})).map(t => (t as any).__toolName);
 		expect(names).toContain("write_todos");
 	});
 
@@ -83,7 +86,7 @@ describe("tool definitions", () => {
 			apiKey: "key",
 			model: "model",
 			customInstructions: "",
-		})).map(t => t.name);
+		})).map(t => (t as any).__toolName);
 		expect(names).not.toContain("delete_document");
 	});
 
@@ -98,7 +101,7 @@ describe("tool definitions", () => {
 			() => null,
 			undefined,
 			{ includeDeleteDocument: true },
-		).map(t => t.name);
+		).map(t => (t as any).__toolName);
 		expect(names).toContain("delete_document");
 	});
 
@@ -108,7 +111,7 @@ describe("tool definitions", () => {
 			apiKey: "key",
 			model: "model",
 			customInstructions: "",
-		})).map(t => t.name);
+		})).map(t => (t as any).__toolName);
 		expect(names).toContain("create_scheduled_task");
 		expect(names).toContain("list_scheduled_tasks");
 		expect(names).toContain("update_scheduled_task");
@@ -125,9 +128,9 @@ describe("SQL escape in tool definitions", () => {
 			model: "model",
 			customInstructions: "",
 		}));
-		const searchDoc = tools.find(t => t.name === "search_documents");
+		const searchDoc = tools.find(t => (t as any).__toolName === "search_documents");
 		expect(searchDoc).toBeDefined();
-		expect(searchDoc!.schema).toBeDefined();
+		expect((searchDoc as any).inputSchema).toBeDefined();
 	});
 
 	it("write_todos tool has correct schema", () => {
@@ -137,7 +140,7 @@ describe("SQL escape in tool definitions", () => {
 			model: "model",
 			customInstructions: "",
 		}));
-		const writeTodos = tools.find(t => t.name === "write_todos");
+		const writeTodos = tools.find(t => (t as any).__toolName === "write_todos");
 		expect(writeTodos).toBeDefined();
 		expect(writeTodos!.description).toContain("plan");
 	});
@@ -149,9 +152,9 @@ describe("SQL escape in tool definitions", () => {
 			model: "model",
 			customInstructions: "",
 		}));
-		expect(tools.find(t => t.name === "search_todos")).toBeUndefined();
-		expect(tools.find(t => t.name === "toggle_todo")).toBeUndefined();
-		expect(tools.find(t => t.name === "get_todo_stats")).toBeUndefined();
+		expect(tools.find(t => (t as any).__toolName === "search_todos")).toBeUndefined();
+		expect(tools.find(t => (t as any).__toolName === "toggle_todo")).toBeUndefined();
+		expect(tools.find(t => (t as any).__toolName === "get_todo_stats")).toBeUndefined();
 	});
 });
 
@@ -186,7 +189,7 @@ describe("edit_blocks tool", () => {
 		});
 
 		const tool = createEditBlocksTool();
-		const raw = await (tool as any).invoke({
+		const raw = await runTool(tool,{
 			blocks: [{ id: "old-block", content: "updated" }],
 		});
 
@@ -233,7 +236,7 @@ describe("edit_blocks tool", () => {
 		});
 
 		const tool = createEditBlocksTool();
-		const raw = await (tool as any).invoke({
+		const raw = await runTool(tool,{
 			blocks: [{ id: "old-first", content: "updated first" }],
 		});
 
@@ -267,7 +270,7 @@ describe("delete_document tool", () => {
 		});
 
 		const tool = createDeleteDocumentTool();
-		const raw = await (tool as any).invoke({ id: "doc-1" });
+		const raw = await runTool(tool,{ id: "doc-1" });
 
 		expect(fetchMock).toHaveBeenCalledWith("/api/filetree/removeDocByID", expect.anything());
 		expect(JSON.parse(raw)).toEqual({
@@ -292,7 +295,7 @@ describe("delete_document tool", () => {
 		});
 
 		const tool = createDeleteDocumentTool();
-		const raw = await (tool as any).invoke({ id: "doc-2" });
+		const raw = await runTool(tool,{ id: "doc-2" });
 
 		expect(fetchMock).toHaveBeenCalledWith("/api/filetree/removeDocByID", expect.anything());
 		expect(JSON.parse(raw)).toEqual({ ok: true, id: "doc-2", title: "doc-2" });
@@ -308,7 +311,7 @@ describe("delete_document tool", () => {
 		});
 
 		const tool = createDeleteDocumentTool();
-		const raw = await (tool as any).invoke({ id: "doc-1" });
+		const raw = await runTool(tool,{ id: "doc-1" });
 
 		expect(fetchMock).not.toHaveBeenCalledWith("/api/filetree/removeDocByID", expect.anything());
 		expect(JSON.parse(raw).status).toBe("declined");

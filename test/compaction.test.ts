@@ -1,18 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
-import { HumanMessage, AIMessage } from "@langchain/core/messages";
+import { describe, expect, it } from "vitest";
+import { MockLanguageModelV3 } from "ai/test";
 import { compactMessages, shouldCompact } from "../src/core/compaction";
 import type { AgentState } from "../src/types";
 
-vi.mock("siyuan", () => ({
-	fetchPost: vi.fn(),
-	openTab: vi.fn(),
-}));
-
 function humanMsg(text: string) {
-	return new HumanMessage(text);
+	return { role: "user", content: text };
 }
 function aiMsg(text: string) {
-	return new AIMessage(text);
+	return { role: "assistant", content: text };
 }
 
 function buildState(turnCount: number): AgentState {
@@ -45,10 +40,7 @@ describe("shouldCompact", () => {
 
 	it("returns true when char threshold exceeded", () => {
 		const state: AgentState = {
-			messages: [
-				humanMsg("a".repeat(5000)),
-				aiMsg("b".repeat(8000)),
-			],
+			messages: [humanMsg("a".repeat(5000)), aiMsg("b".repeat(8000))],
 		};
 		expect(shouldCompact(state, 100, 10000)).toBe(true);
 	});
@@ -61,11 +53,18 @@ describe("shouldCompact", () => {
 });
 
 describe("compactMessages", () => {
-	const mockModel = {
-		invoke: vi.fn().mockResolvedValue({
-			content: "Summary of the conversation.",
-		}),
-	} as any;
+	let lastPrompt: any;
+	const mockModel = new MockLanguageModelV3({
+		doGenerate: async (opts: any) => {
+			lastPrompt = opts.prompt;
+			return {
+				content: [{ type: "text", text: "Summary of the conversation." }],
+				finishReason: "stop",
+				usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+				warnings: [],
+			};
+		},
+	}) as any;
 
 	it("returns null when not enough turns to compact", async () => {
 		const state = buildState(3);
@@ -110,7 +109,6 @@ describe("compactMessages", () => {
 			requirement: "Focus on code-related decisions",
 		});
 		expect(state.compaction!.lastRequirement).toBe("Focus on code-related decisions");
-		const callArg = mockModel.invoke.mock.calls[mockModel.invoke.mock.calls.length - 1][0][0].content;
-		expect(callArg).toContain("Focus on code-related decisions");
+		expect(JSON.stringify(lastPrompt)).toContain("Focus on code-related decisions");
 	});
 });

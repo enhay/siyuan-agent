@@ -1,20 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-	AIMessage,
-	AIMessageChunk,
-	HumanMessage,
-	SystemMessage,
-	ToolMessage,
-} from "@langchain/core/messages";
-import {
 	messageKind,
 	messageContent,
 	messageReasoning,
 	messageToolCallId,
 	messageToolCalls,
 	toolCallId,
-	messageFromDict,
-	messagesFromDict,
+	toModelMessages,
 	genId,
 	setMessageContent,
 	setMessageToolCalls,
@@ -22,14 +14,9 @@ import {
 
 /* ── Wire-format builders ───────────────────────────────────────────────── */
 
-/** lc:1 constructor dict. */
+/** lc:1 constructor dict (the messagesUi track). */
 function lcDict(className: string, kwargs: Record<string, any>): Record<string, any> {
-	return {
-		lc: 1,
-		type: "constructor",
-		id: ["langchain_core", "messages", className],
-		kwargs,
-	};
+	return { lc: 1, type: "constructor", id: ["langchain_core", "messages", className], kwargs };
 }
 
 /** {type:...} simplified dict. */
@@ -39,11 +26,6 @@ function plainDict(type: string, rest: Record<string, any> = {}): Record<string,
 
 describe("messageKind", () => {
 	it.each([
-		["live HumanMessage", new HumanMessage({ content: "hi" }), "human"],
-		["live AIMessage", new AIMessage({ content: "yo" }), "ai"],
-		["live SystemMessage", new SystemMessage({ content: "sys" }), "system"],
-		["live ToolMessage", new ToolMessage({ content: "r", tool_call_id: "t1" }), "tool"],
-		["live AIMessageChunk → ai", new AIMessageChunk({ content: "c" }), "ai"],
 		["lc HumanMessage", lcDict("HumanMessage", { content: "hi" }), "human"],
 		["lc AIMessage", lcDict("AIMessage", { content: "y" }), "ai"],
 		["lc AIMessageChunk → ai", lcDict("AIMessageChunk", { content: "y" }), "ai"],
@@ -55,6 +37,9 @@ describe("messageKind", () => {
 		["plain assistant → ai", plainDict("assistant"), "ai"],
 		["plain system", plainDict("system"), "system"],
 		["plain tool", plainDict("tool"), "tool"],
+		["ModelMessage user → human", { role: "user", content: "hi" }, "human"],
+		["ModelMessage assistant → ai", { role: "assistant", content: [{ type: "text", text: "a" }] }, "ai"],
+		["ModelMessage tool", { role: "tool", content: [] }, "tool"],
 	])("normalises %s", (_label, message, expected) => {
 		expect(messageKind(message)).toBe(expected);
 	});
@@ -65,26 +50,21 @@ describe("messageKind", () => {
 		expect(messageKind({})).toBe("");
 		expect(messageKind({ type: "weird" })).toBe("");
 	});
-
-	it("recognises SystemMessage across all three formats", () => {
-		expect(messageKind(new SystemMessage({ content: "s" }))).toBe("system");
-		expect(messageKind(lcDict("SystemMessage", { content: "s" }))).toBe("system");
-		expect(messageKind(plainDict("system"))).toBe("system");
-	});
 });
 
 describe("messageContent", () => {
 	it.each([
-		["live", new AIMessage({ content: "hello" })],
 		["lc", lcDict("AIMessage", { content: "hello" })],
 		["plain", plainDict("ai", { content: "hello" })],
+		["ModelMessage string", { role: "user", content: "hello" }],
 	])("reads string content from %s", (_label, message) => {
 		expect(messageContent(message)).toBe("hello");
 	});
 
-	it("returns '' for non-string content (array)", () => {
-		expect(messageContent({ content: [{ type: "text", text: "x" }] })).toBe("");
-		expect(messageContent(lcDict("AIMessage", { content: [{ type: "text" }] }))).toBe("");
+	it("joins text parts of a ModelMessage", () => {
+		expect(messageContent({ role: "assistant", content: [{ type: "text", text: "he" }, { type: "text", text: "llo" }] })).toBe("hello");
+		// non-text parts are ignored
+		expect(messageContent({ content: [{ type: "tool-call" }, { type: "text", text: "x" }] })).toBe("x");
 	});
 
 	it("returns '' for missing content / nullish message", () => {
@@ -92,47 +72,27 @@ describe("messageContent", () => {
 		expect(messageContent(undefined)).toBe("");
 		expect(messageContent(null)).toBe("");
 	});
-
-	it("contract: empty content → '' (not null)", () => {
-		const result = messageContent(new AIMessage({ content: "" }));
-		expect(result).toBe("");
-		expect(result).not.toBeNull();
-	});
 });
 
 describe("messageReasoning", () => {
-	it("reads additional_kwargs.reasoning_content (live / stream path)", () => {
-		const msg = new AIMessage({
-			content: "answer",
-			additional_kwargs: { reasoning_content: "thinking..." },
-		});
-		expect(messageReasoning(msg)).toBe("thinking...");
-	});
-
 	it("reads kwargs.additional_kwargs.reasoning_content (lc dict path)", () => {
-		const msg = lcDict("AIMessage", {
-			content: "answer",
-			additional_kwargs: { reasoning_content: "lc-think" },
-		});
+		const msg = lcDict("AIMessage", { content: "answer", additional_kwargs: { reasoning_content: "lc-think" } });
 		expect(messageReasoning(msg)).toBe("lc-think");
 	});
 
-	it("reads kwargs.lc_kwargs.additional_kwargs.reasoning_content (persisted render path)", () => {
-		const msg = {
-			kwargs: { lc_kwargs: { additional_kwargs: { reasoning_content: "persisted-1" } } },
-		};
-		expect(messageReasoning(msg)).toBe("persisted-1");
+	it("reads additional_kwargs.reasoning_content (stream path)", () => {
+		expect(messageReasoning({ additional_kwargs: { reasoning_content: "t" } })).toBe("t");
 	});
 
 	it("reads lc_kwargs.additional_kwargs.reasoning_content (persisted render path)", () => {
-		const msg = {
-			lc_kwargs: { additional_kwargs: { reasoning_content: "persisted-2" } },
-		};
-		expect(messageReasoning(msg)).toBe("persisted-2");
+		expect(messageReasoning({ lc_kwargs: { additional_kwargs: { reasoning_content: "persisted-2" } } })).toBe("persisted-2");
+	});
+
+	it("reads a ModelMessage reasoning content part", () => {
+		expect(messageReasoning({ role: "assistant", content: [{ type: "reasoning", text: "deep" }, { type: "text", text: "a" }] })).toBe("deep");
 	});
 
 	it("returns '' when no reasoning present", () => {
-		expect(messageReasoning(new AIMessage({ content: "x" }))).toBe("");
 		expect(messageReasoning({})).toBe("");
 		expect(messageReasoning(undefined)).toBe("");
 	});
@@ -140,9 +100,9 @@ describe("messageReasoning", () => {
 
 describe("messageToolCallId", () => {
 	it.each([
-		["live", new ToolMessage({ content: "r", tool_call_id: "call_1" })],
 		["lc", lcDict("ToolMessage", { content: "r", tool_call_id: "call_1" })],
 		["plain", plainDict("tool", { tool_call_id: "call_1" })],
+		["ModelMessage tool-result part", { role: "tool", content: [{ type: "tool-result", toolCallId: "call_1" }] }],
 	])("reads tool_call_id from %s", (_label, message) => {
 		expect(messageToolCallId(message)).toBe("call_1");
 	});
@@ -157,12 +117,18 @@ describe("messageToolCalls", () => {
 	const calls = [{ id: "a", name: "tool_a", args: {} }];
 
 	it.each([
-		["live", new AIMessage({ content: "", tool_calls: calls as any })],
 		["lc", lcDict("AIMessage", { content: "", tool_calls: calls })],
 		["plain", plainDict("ai", { tool_calls: calls })],
 	])("reads tool_calls array from %s", (_label, message) => {
 		expect(messageToolCalls(message)).toHaveLength(1);
 		expect(messageToolCalls(message)[0].name).toBe("tool_a");
+	});
+
+	it("reads tool-call content parts of a ModelMessage as {id,name,args}", () => {
+		const msg = { role: "assistant", content: [{ type: "tool-call", toolCallId: "a", toolName: "tool_a", input: { q: 1 } }] };
+		const out = messageToolCalls(msg);
+		expect(out).toHaveLength(1);
+		expect(out[0]).toEqual({ id: "a", name: "tool_a", args: { q: 1 } });
 	});
 
 	it("returns [] when absent or non-array", () => {
@@ -173,9 +139,10 @@ describe("messageToolCalls", () => {
 });
 
 describe("toolCallId", () => {
-	it("reads id then tool_call_id", () => {
+	it("reads id then tool_call_id then toolCallId", () => {
 		expect(toolCallId({ id: "x" })).toBe("x");
 		expect(toolCallId({ tool_call_id: "y" })).toBe("y");
+		expect(toolCallId({ toolCallId: "z" })).toBe("z");
 		expect(toolCallId({ id: "x", tool_call_id: "y" })).toBe("x");
 	});
 
@@ -186,42 +153,31 @@ describe("toolCallId", () => {
 	});
 });
 
-describe("messageFromDict / messagesFromDict", () => {
-	it("deserialises lc:1 constructor dicts to live instances", () => {
-		expect(messageKind(messageFromDict(lcDict("HumanMessage", { content: "h" })))).toBe("human");
-		expect(messageKind(messageFromDict(lcDict("AIMessage", { content: "a" })))).toBe("ai");
-		expect(messageKind(messageFromDict(lcDict("AIMessageChunk", { content: "a" })))).toBe("ai");
-		expect(messageKind(messageFromDict(lcDict("SystemMessage", { content: "s" })))).toBe("system");
-		expect(messageKind(messageFromDict(lcDict("ToolMessage", { content: "t", tool_call_id: "x" })))).toBe("tool");
+describe("toModelMessages", () => {
+	it("passes through ModelMessages unchanged", () => {
+		const mm = [{ role: "user", content: "hi" }, { role: "assistant", content: [{ type: "text", text: "yo" }] }];
+		expect(toModelMessages(mm)).toEqual(mm);
 	});
 
-	it("deserialises simplified {type} dicts", () => {
-		expect(messageKind(messageFromDict(plainDict("human", { content: "h" })))).toBe("human");
-		expect(messageKind(messageFromDict(plainDict("user", { content: "h" })))).toBe("human");
-		expect(messageKind(messageFromDict(plainDict("ai", { content: "a" })))).toBe("ai");
-		expect(messageKind(messageFromDict(plainDict("assistant", { content: "a" })))).toBe("ai");
-		expect(messageKind(messageFromDict(plainDict("system", { content: "s" })))).toBe("system");
-		expect(messageKind(messageFromDict(plainDict("tool", { tool_call_id: "x" })))).toBe("tool");
-	});
-
-	it("defaults missing ToolMessage tool_call_id to ''", () => {
-		const msg = messageFromDict(lcDict("ToolMessage", { content: "r" }));
-		expect(messageToolCallId(msg)).toBe("");
-	});
-
-	it("throws on unknown class / type", () => {
-		expect(() => messageFromDict(lcDict("MysteryMessage", {}))).toThrow();
-		expect(() => messageFromDict(plainDict("mystery"))).toThrow();
-	});
-
-	it("messagesFromDict maps a list", () => {
-		const out = messagesFromDict([
-			lcDict("HumanMessage", { content: "h" }),
-			plainDict("ai", { content: "a" }),
+	it("converts lc:1 dicts to ModelMessages", () => {
+		const out = toModelMessages([
+			lcDict("HumanMessage", { content: "hi" }),
+			lcDict("AIMessage", {
+				content: "answer",
+				tool_calls: [{ id: "c1", name: "search", args: { q: 1 } }],
+				additional_kwargs: { reasoning_content: "think" },
+			}),
+			lcDict("ToolMessage", { content: "result", tool_call_id: "c1" }),
 		]);
-		expect(out).toHaveLength(2);
-		expect(messageKind(out[0])).toBe("human");
-		expect(messageKind(out[1])).toBe("ai");
+		expect(out[0]).toEqual({ role: "user", content: "hi" });
+		expect(out[1].role).toBe("assistant");
+		expect(out[1].content).toEqual([
+			{ type: "reasoning", text: "think" },
+			{ type: "text", text: "answer" },
+			{ type: "tool-call", toolCallId: "c1", toolName: "search", input: { q: 1 } },
+		]);
+		expect(out[2].role).toBe("tool");
+		expect((out[2].content as any)[0]).toMatchObject({ type: "tool-result", toolCallId: "c1" });
 	});
 });
 
@@ -235,28 +191,16 @@ describe("genId", () => {
 	});
 });
 
-describe("writers: setMessageContent / setMessageToolCalls", () => {
-	it("writes content into kwargs when present", () => {
-		const raw: Record<string, any> = { kwargs: { content: "old" } };
-		setMessageContent(raw, "new");
-		expect(raw.kwargs.content).toBe("new");
+describe("setMessageContent / setMessageToolCalls", () => {
+	it("writes content into lc:1 kwargs", () => {
+		const m = lcDict("AIMessage", { content: "old" });
+		setMessageContent(m, "new");
+		expect(m.kwargs.content).toBe("new");
 	});
 
-	it("writes content at top level when no kwargs", () => {
-		const raw: Record<string, any> = { content: "old" };
-		setMessageContent(raw, "new");
-		expect(raw.content).toBe("new");
-	});
-
-	it("writes tool_calls into kwargs for lc:1 dicts", () => {
-		const raw: Record<string, any> = { lc: 1, kwargs: {} };
-		setMessageToolCalls(raw, [{ id: "a" }]);
-		expect(raw.kwargs.tool_calls).toEqual([{ id: "a" }]);
-	});
-
-	it("writes tool_calls at top level for plain dicts", () => {
-		const raw: Record<string, any> = {};
-		setMessageToolCalls(raw, [{ id: "b" }]);
-		expect(raw.tool_calls).toEqual([{ id: "b" }]);
+	it("writes tool_calls into lc:1 kwargs", () => {
+		const m = lcDict("AIMessage", { content: "x" });
+		setMessageToolCalls(m, [{ id: "a", name: "t", args: {} }]);
+		expect(m.kwargs.tool_calls).toHaveLength(1);
 	});
 });
