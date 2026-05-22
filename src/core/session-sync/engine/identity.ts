@@ -57,7 +57,7 @@ export function projectFolder(cwd: string | undefined): string {
 	return slug === "unknown" ? "未归类" : slug;
 }
 
-const SOURCE_EMOJI: Record<SessionSource, string> = { codex: "🔵", claude: "🟣" };
+const SOURCE_EMOJI: Record<SessionSource, string> = { codex: "🧪", claude: "🪻" };
 
 /** Readable doc name shown in the tree: `<emoji><MM-DD> <title>`. The source
  *  emoji + date prefix give at-a-glance source and chronological sort within the

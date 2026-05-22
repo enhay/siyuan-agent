@@ -59,8 +59,8 @@ describe("identity helpers", () => {
 	});
 
 	it("buildDocName prefixes emoji + MM-DD, keeps title clean", () => {
-		expect(buildDocName(makeSession({ source: "codex" }), "修复登录")).toBe("🔵05-21 修复登录");
-		expect(buildDocName(makeSession({ source: "claude" }), "调研")).toBe("🟣05-21 调研");
+		expect(buildDocName(makeSession({ source: "codex" }), "修复登录")).toBe("🧪05-21 修复登录");
+		expect(buildDocName(makeSession({ source: "claude" }), "调研")).toBe("🪻05-21 调研");
 	});
 
 	it("inferTitle truncates long first user message; falls back when none", () => {

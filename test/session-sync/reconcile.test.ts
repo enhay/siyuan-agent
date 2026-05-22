@@ -196,7 +196,7 @@ describe("reconcileOnce", () => {
 		expect(writer.calls.create).toBe(1);
 		expect(writer.calls.rename).toBe(1); // forced because isNew
 		// Renamed to the readable name (emoji + MM-DD + clean title), not the slug leaf.
-		const created = [...writer.docs.values()].find((d) => /^🔵\d\d-\d\d hello$/.test(d.title));
+		const created = [...writer.docs.values()].find((d) => /^🧪\d\d-\d\d hello$/.test(d.title));
 		expect(created).toBeDefined();
 	});
 });
