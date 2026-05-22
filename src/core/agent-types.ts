@@ -2,15 +2,24 @@
  * agent-types — project-facing aliases for the framework-bound agent types.
  *
  * The rest of the codebase names `AgentTool` / `AgentModel`, never the raw
- * LangChain interfaces. A framework swap (e.g. to AI SDK) re-points these two
- * aliases here instead of editing every call site.
+ * framework interfaces. The LangChain→AI SDK swap re-points these aliases here
+ * instead of editing every call site (Wave 0 of the v6 migration).
  */
 
-import type { StructuredToolInterface } from "@langchain/core/tools";
-import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import type { LanguageModel, Tool, ToolSet } from "ai";
 
-/** A tool the agent can call. LangChain-bound; swap re-points this alias. */
-export type AgentTool = StructuredToolInterface;
+/**
+ * A single tool the agent can call. AI SDK-bound.
+ *
+ * GOTCHA (vs LangChain): an AI SDK `Tool` carries **no name** — the name is the
+ * key in the {@link AgentToolSet} record passed to `streamText`/`Agent`. So
+ * `defineTool` must return a named wrapper (or the toolset must be assembled
+ * from a name→tool map) for the agent to address tools by name.
+ */
+export type AgentTool = Tool<any, any>;
 
-/** A chat model the agent runs on. LangChain-bound; swap re-points this alias. */
-export type AgentModel = BaseChatModel;
+/** The keyed tool collection handed to `streamText`/`Agent` (name → tool). */
+export type AgentToolSet = ToolSet;
+
+/** A chat model the agent runs on. AI SDK-bound (string id | LanguageModelV2/V3). */
+export type AgentModel = LanguageModel;
