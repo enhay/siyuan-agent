@@ -131,6 +131,10 @@ background: color-mix(in srgb, var(--agent-accent, var(--b3-theme-primary)) 8%, 
 
 .chat-panel__todos-dock {
 	padding: 8px 14px 6px;
+	/* Never let a long plan crush the message area: the dock is flex-shrink:0,
+	   so cap it and scroll internally instead of eating the messages/composer. */
+	max-height: 38%;
+	overflow-y: auto;
 }
 
 .chat-todos-bar {

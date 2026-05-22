@@ -39,6 +39,8 @@
    so the composer stays pinned to the bottom whether the chat is new or long. */
 .chat-panel__session-bar,
 .chat-panel__context-bar,
+.chat-panel__view-header,
+.chat-panel__tasks-header,
 .chat-panel__todos-dock,
 .chat-panel__bottom-bar {
 	flex-shrink: 0;

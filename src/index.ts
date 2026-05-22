@@ -118,14 +118,22 @@ export default class SiYuanAgent extends Plugin {
 			data: {},
 			type: DOCK_TYPE,
 			init: (dock) => {
+				// Guard against re-init without a paired destroy (workspace switch /
+				// layout reload): tear down the previous panel so its document-level
+				// listeners don't leak and fire on stale DOM.
+				if (this.chatPanel) {
+					this.chatPanel.destroy();
+					this.chatPanel = null;
+				}
 				this.dockElement = dock.element;
 				// Make the dock content a full-height flex column so the `.fn__flex-1`
 				// body actually fills (giving .chat-panel a definite height). Without
 				// this the flex chain has no height to distribute and the message area
 				// collapses to its content — pushing the composer up to the top.
-				dock.element.style.display = "flex";
-				dock.element.style.flexDirection = "column";
-				dock.element.style.height = "100%";
+				const dockEl = dock.element as HTMLElement;
+				dockEl.style.display = "flex";
+				dockEl.style.flexDirection = "column";
+				dockEl.style.height = "100%";
 				dock.element.innerHTML = `<div class="toolbar toolbar--border toolbar--dark">
 					<svg class="toolbar__icon"><use xlink:href="#iconAgent"></use></svg>
 					<div class="toolbar__text">${DOCK_TITLE}</div>
@@ -228,9 +236,11 @@ export default class SiYuanAgent extends Plugin {
 	}
 
 	onunload() {
+		if (this.dockWidthTimer) { clearTimeout(this.dockWidthTimer); this.dockWidthTimer = null; }
 		this.scheduledTaskManager?.stop();
 		this.sessionSyncManager?.stop();
 		this.chatPanel?.destroy();
+		this.chatPanel = null;
 		void this.mcpManager.disconnectAll();
 	}
 
