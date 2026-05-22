@@ -187,10 +187,11 @@ export function renderSession(session: NormalizedSession, options: RenderOptions
 				continue;
 			}
 			if (it.role === "user") {
-				if (prevRole !== "user") lines.push("> 🧑 **用户**", ">");
+				// Light role marker: emoji only (blockquote already signals "user").
+				if (prevRole !== "user") lines.push("> 🧑", ">");
 				lines.push(...it.text.split("\n").map((line) => `> ${line}`), "");
 			} else {
-				if (prevRole !== "assistant") lines.push("🤖 **助手**", "");
+				if (prevRole !== "assistant") lines.push("🤖", "");
 				lines.push(it.text, "");
 			}
 			prevRole = it.role;

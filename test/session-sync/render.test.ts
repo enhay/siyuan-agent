@@ -28,9 +28,9 @@ describe("renderSession readability", () => {
 
 	it("user turns are blockquotes (🧑), assistant turns are plain blocks (🤖)", () => {
 		const md = renderSession(session());
-		expect(md).toContain("> 🧑 **用户**");
+		expect(md).toContain("> 🧑");
 		expect(md).toContain("> fix the login bug");
-		expect(md).toContain("🤖 **助手**");
+		expect(md).toContain("🤖");
 		expect(md).toContain("```js"); // assistant code renders natively (not quoted)
 		expect(md).not.toContain("> ```js");
 	});
@@ -78,8 +78,8 @@ describe("renderSession readability", () => {
 		);
 		expect(md).not.toContain("system-reminder");
 		expect(md).toContain("> real question");
-		// the reminder-only user turn is dropped, so only one 用户 block
-		expect(md.match(/🧑 \*\*用户\*\*/g)?.length).toBe(1);
+		// the reminder-only user turn is dropped, so only one 🧑 user block
+		expect(md.match(/^> 🧑$/gm)?.length).toBe(1);
 	});
 
 	it("strips <local-command-caveat> + <command-*> wrappers, keeps the real message", () => {
