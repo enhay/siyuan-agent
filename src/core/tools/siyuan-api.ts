@@ -1,3 +1,4 @@
+import { confirm } from "siyuan";
 import type { ToolEmitContext } from "./define-tool";
 
 /** Call a SiYuan kernel API and return `resp.data` on success.
@@ -37,5 +38,17 @@ export function emitActivity(
 	emitToolEvent(ctx, {
 		__tool_type: "activity",
 		...payload,
+	});
+}
+
+/**
+ * Promise-wrapped SiYuan native confirm dialog for high-risk, irreversible tool
+ * actions. Resolves true when the user confirms, false when cancelled. Only call
+ * from tools registered in interactive chat — there is no user to respond in
+ * autonomous/scheduled runs.
+ */
+export function confirmDestructive(title: string, text: string): Promise<boolean> {
+	return new Promise((resolve) => {
+		confirm(title, text, () => resolve(true), () => resolve(false));
 	});
 }

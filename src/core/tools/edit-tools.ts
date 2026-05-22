@@ -1,7 +1,7 @@
 import { defineTool } from "./define-tool";
 import { z } from "zod";
 import { openTab } from "siyuan";
-import { emitActivity } from "./siyuan-api";
+import { emitActivity, confirmDestructive } from "./siyuan-api";
 import { kernel, sqlValue } from "./siyuan-kernel";
 import { defaultTranslator, type Translator } from "../../i18n";
 
@@ -256,6 +256,16 @@ return defineTool(
 			// Ignore: a bad/stale ID surfaces below when removeDocByID errors.
 		}
 		const title = hPath.split("/").filter(Boolean).pop() || id;
+		// Hard UI gate: the agent cannot delete a document without the user
+		// clicking confirm. (delete_document is interactive-chat only, so a user
+		// is always present to respond.)
+		const approved = await confirmDestructive(
+			i18n.t("tool.confirm.deleteTitle"),
+			i18n.t("tool.confirm.deleteDocument", { target: hPath || id }),
+		);
+		if (!approved) {
+			return JSON.stringify({ status: "declined", id, message: i18n.t("tool.confirm.declined") });
+		}
 		await kernel.filetree.removeDocByID(id);
 		emitActivity(ctx, {
 			category: "change",

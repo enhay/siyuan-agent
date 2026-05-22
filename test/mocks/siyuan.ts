@@ -9,3 +9,8 @@ export function openTab(): void {
 export function showMessage(): void {
 	// no-op for tests
 }
+
+export function confirm(_title: string, _text: string, onConfirm?: () => void): void {
+	// Tests auto-approve confirmations.
+	onConfirm?.();
+}

@@ -2,9 +2,13 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { getDefaultTools, getLookupTools } from "../src/core/tools";
 import { createEditBlocksTool, createDeleteDocumentTool } from "../src/core/tools/edit-tools";
 
+const hoisted = vi.hoisted(() => ({ confirmApprove: true }));
+
 vi.mock("siyuan", () => ({
 	fetchPost: vi.fn(),
 	openTab: vi.fn(),
+	confirm: (_t: string, _x: string, onConfirm?: () => void, onCancel?: () => void) =>
+		hoisted.confirmApprove ? onConfirm?.() : onCancel?.(),
 }));
 
 // Intercept global fetch for siyuanFetch calls
@@ -14,6 +18,7 @@ const mockFetchResponse = (data: any, code = 0) => ({
 
 beforeEach(() => {
 	vi.restoreAllMocks();
+	hoisted.confirmApprove = true;
 });
 
 describe("tool definitions", () => {
@@ -291,6 +296,22 @@ describe("delete_document tool", () => {
 
 		expect(fetchMock).toHaveBeenCalledWith("/api/filetree/removeDocByID", expect.anything());
 		expect(JSON.parse(raw)).toEqual({ ok: true, id: "doc-2", title: "doc-2" });
+	});
+
+	it("does not delete when the user declines the confirmation", async () => {
+		hoisted.confirmApprove = false;
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+			if (url === "/api/filetree/getHPathByID") {
+				return mockFetchResponse("/Projects/My Doc") as any;
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		});
+
+		const tool = createDeleteDocumentTool();
+		const raw = await (tool as any).invoke({ id: "doc-1" });
+
+		expect(fetchMock).not.toHaveBeenCalledWith("/api/filetree/removeDocByID", expect.anything());
+		expect(JSON.parse(raw).status).toBe("declined");
 	});
 });
 
