@@ -16,6 +16,17 @@ export interface FsPromisesLike {
 	readdir(path: string, opts: { withFileTypes: true }): Promise<Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>>;
 	readFile(path: string, encoding: "utf-8"): Promise<string>;
 	stat(path: string): Promise<{ size: number; mtimeMs: number }>;
+	/** Open a file for random-access read. Optional — when missing,
+	 *  `read(path, fromOffset)` falls back to a full readFile + slice. The plugin
+	 *  injects the real `fs.promises.open`; tests can omit it. */
+	open?(path: string, flags: string): Promise<FsFileHandleLike>;
+}
+
+/** Subset of Node's `FileHandle` we use for offset reads. */
+export interface FsFileHandleLike {
+	stat(): Promise<{ size: number }>;
+	read(buffer: Uint8Array, offset: number, length: number, position: number): Promise<{ bytesRead: number }>;
+	close(): Promise<void>;
 }
 
 export interface FsSourceConfig {
@@ -99,8 +110,34 @@ export function createFsSource(config: FsSourceConfig, fs: FsPromisesLike = defa
 				sizeBytes: g.sizeBytes,
 			}));
 		},
-		async read(path: string): Promise<string> {
-			return fs.readFile(path, "utf-8");
+		async read(path: string, fromOffset?: number): Promise<string> {
+			// Full read: avoid the open/close overhead and use a single syscall.
+			if (!fromOffset || fromOffset <= 0) {
+				return fs.readFile(path, "utf-8");
+			}
+			// Random-access incremental read: only the bytes at/after `fromOffset`.
+			// Caps memory at the size of the delta, not the whole-file size —
+			// matters when a single jsonl is 100s of MB.
+			if (fs.open) {
+				const handle = await fs.open(path, "r");
+				try {
+					const st = await handle.stat();
+					const remaining = st.size - fromOffset;
+					if (remaining <= 0) return "";
+					const buf = new Uint8Array(remaining);
+					await handle.read(buf, 0, remaining, fromOffset);
+					return new TextDecoder("utf-8").decode(buf);
+				} finally {
+					await handle.close().catch(() => undefined);
+				}
+			}
+			// Fallback: full read then slice. Loses the memory benefit but keeps
+			// behavior correct against in-memory test doubles that don't implement open.
+			const whole = await fs.readFile(path, "utf-8");
+			// Slice by bytes: encode + offset + decode. UTF-8 boundary safe because
+			// JSONL lines end at "\n" which is a single ASCII byte.
+			const bytes = new TextEncoder().encode(whole);
+			return new TextDecoder("utf-8").decode(bytes.subarray(fromOffset));
 		},
 		async probe(): Promise<string> {
 			const files = await gather();

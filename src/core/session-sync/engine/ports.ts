@@ -25,8 +25,12 @@ export interface FileSource {
 	/** List candidate session files for the enabled sources, already filtered to
 	 *  the backfill window when applicable. */
 	list(): Promise<DiscoveredFile[]>;
-	/** Read a file's full content as UTF-8 text. */
-	read(path: string): Promise<string>;
+	/** Read a file as UTF-8 text. When `fromOffset` is provided, only the bytes
+	 *  at or after that offset are returned (an opaque byte cursor matched to
+	 *  what `list()` reports as `sizeBytes`). Used by the incremental reconciler
+	 *  to read only the appended bytes of a growing JSONL — caps memory at the
+	 *  size of the delta, not the whole-file size. */
+	read(path: string, fromOffset?: number): Promise<string>;
 	/** Cheap change probe: a signature over the recent window (e.g. count + maxMtime).
 	 *  Reconcile only runs a full pass when this changes. Must catch *appends* to an
 	 *  active session, so it cannot be a directory mtime. See plan §7. */

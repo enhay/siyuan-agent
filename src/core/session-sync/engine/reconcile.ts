@@ -80,10 +80,38 @@ async function resolveTitle(
 	return { title: inferTitle(session), titleSource: "heuristic" };
 }
 
-function parseFile(file: DiscoveredFile, content: string): NormalizedSession {
+function parseFile(file: DiscoveredFile, content: string, prior?: PriorMetaForParse): NormalizedSession {
 	return file.source === "codex"
-		? parseCodexSession(content, file.path)
-		: parseClaudeSession(content, file.path);
+		? parseCodexSession(content, file.path, prior)
+		: parseClaudeSession(content, file.path, prior);
+}
+
+/** Subset of a SessionRecord that the parsers can use to fill in fields a
+ *  partial (offset-based) slice may lack — e.g. session_meta is upstream of
+ *  the offset so the slice has no sessionId/cwd/model. */
+interface PriorMetaForParse {
+	sessionId?: string;
+	cwd?: string;
+	model?: string;
+	createdAt?: string;
+	parentSessionId?: string;
+	agentNickname?: string;
+	agentRole?: string;
+	isSubAgent?: boolean;
+}
+
+function extractPriorMeta(rec: SessionRecord): PriorMetaForParse {
+	return {
+		sessionId: rec.sessionId,
+		cwd: rec.cwd,
+		model: rec.model,
+		createdAt: rec.createdAt,
+		parentSessionId: rec.parentSessionId,
+		agentNickname: rec.agentNickname,
+		agentRole: rec.agentRole,
+		// Sub-agents have an assetPath, not a docId — that's our authoritative marker.
+		isSubAgent: !!rec.assetPath,
+	};
 }
 
 function toRecord(
@@ -135,6 +163,7 @@ async function upsertDoc(
 	file: DiscoveredFile,
 	result: ReconcileResult,
 	childLinks: ChildLink[],
+	isPartial: boolean,
 ): Promise<void> {
 	const key = sessionKey(session);
 	const existing = state.sessions[key];
@@ -150,7 +179,7 @@ async function upsertDoc(
 		const partDocIds = existing.partDocIds ?? (existing.docId ? [existing.docId] : []);
 		const activeDocId = partDocIds[partDocIds.length - 1];
 		if (activeDocId && (await deps.writer.docExists(activeDocId))) {
-			return upsertDocIncrementalUpdate(deps, state, session, file, result, childLinks);
+			return upsertDocIncrementalUpdate(deps, state, session, file, result, childLinks, isPartial);
 		}
 		// Active part vanished (user deleted it). Drop the record + fall through to
 		// a fresh create. The findDocBySessionKey lookup inside upsertDocCreate
@@ -172,7 +201,14 @@ function approxByteLen(text: string): number {
  *  guard against gratuitous replaceSection calls when only the cursor moved. */
 async function computeMetaHash(
 	session: NormalizedSession,
-	options: { title?: string; status?: string; subAgents: ChildLink[] },
+	options: {
+		title?: string;
+		status?: string;
+		subAgents: ChildLink[];
+		totalMessageCount?: number;
+		totalToolCount?: number;
+		totalFailedToolCount?: number;
+	},
 	turns: ReturnType<typeof cleanTurns>,
 ): Promise<{ overviewMd: string; summaryMd: string; toolsMd: string; warningsMd: string; hash: string }> {
 	const overviewMd = renderOverviewBlock(session, options, options.subAgents);
@@ -307,6 +343,7 @@ async function upsertDocIncrementalUpdate(
 	file: DiscoveredFile,
 	result: ReconcileResult,
 	childLinks: ChildLink[],
+	isPartial: boolean,
 ): Promise<void> {
 	const key = sessionKey(session);
 	const stateKey = fileKey(file.source, file.path);
@@ -322,30 +359,54 @@ async function upsertDocIncrementalUpdate(
 	const appendedMsgs = existing.appendedMessageCount ?? 0;
 	const appendedTools = existing.appendedToolCount ?? 0;
 	const appendedSubs = existing.appendedSubAgentCount ?? 0;
-	const newMessages = session.messages.slice(appendedMsgs);
-	const newTools = session.toolActivities.slice(appendedTools);
+	// In partial-read mode the parser only saw the delta bytes, so `session.messages`
+	// IS the new tail already. In full-read mode it's the whole session and we
+	// have to slice by the prior count. Same for toolActivities. Sub-agent links
+	// come from in-memory state (not the read), so always slice them.
+	const newMessages = isPartial ? session.messages : session.messages.slice(appendedMsgs);
+	const newTools = isPartial ? session.toolActivities : session.toolActivities.slice(appendedTools);
 	const newSubs = subs.slice(appendedSubs);
+
+	// Total counts after this tick — used for overview rendering when partial
+	// reads can't trust `session.messages.length` directly.
+	const totalMessageCount = isPartial ? appendedMsgs + session.messages.length : session.messages.length;
+	const totalToolCount = isPartial ? appendedTools + session.toolActivities.length : session.toolActivities.length;
+	const totalFailedToolCount = isPartial
+		? (existing.failedToolCount ?? 0) + session.toolActivities.filter((t) => t.status === "failure").length
+		: session.toolActivities.filter((t) => t.status === "failure").length;
 
 	const dialogueChange = newMessages.length > 0 || newTools.length > 0 || newSubs.length > 0;
 
 	// Meta hash gate — saves O(1 SQL + 4 replaceSection) per tick on a session
-	// that hasn't visibly changed since last write.
+	// that hasn't visibly changed since last write. Only meaningful in full-read
+	// mode; in partial mode the meta sections (summary/tools/warnings) lack the
+	// full state needed to render them correctly, so we skip them entirely.
 	const turns = cleanTurns(session);
-	const meta = await computeMetaHash(session, { title, status, subAgents: subs }, turns);
-	const metaChange = meta.hash !== existing.metaHash;
+	const meta = await computeMetaHash(
+		session,
+		{ title, status, subAgents: subs, totalMessageCount, totalToolCount, totalFailedToolCount },
+		turns,
+	);
+	const metaChange = !isPartial && meta.hash !== existing.metaHash;
 
 	if (!dialogueChange && !metaChange) {
 		state.files[stateKey] = { offset: file.sizeBytes ?? 0, mtimeMs: file.mtimeMs, sessionKey: key };
 		return;
 	}
 
-	// Update meta sections on the PRIMARY part (only it carries them; new parts
-	// only have a navigation header + their own dialog section).
+	// Meta sections live on the PRIMARY part (new spilled parts carry only a
+	// nav header + their own dialog section). Two modes:
+	// - Full read: replace all four sections when their joined hash moved.
+	// - Partial read: only refresh overview (counts move every tick), since the
+	//   delta-only `session.toolActivities` etc. would render an inaccurate
+	//   tools/summary/warnings section. Those stay frozen until a full re-read.
 	if (metaChange) {
 		await deps.writer.replaceSection(primaryDocId, "overview", meta.overviewMd);
 		await deps.writer.replaceSection(primaryDocId, "summary", meta.summaryMd);
 		await deps.writer.replaceSection(primaryDocId, "tools", meta.toolsMd);
 		await deps.writer.replaceSection(primaryDocId, "warnings", meta.warningsMd);
+	} else if (isPartial && dialogueChange) {
+		await deps.writer.replaceSection(primaryDocId, "overview", meta.overviewMd);
 	}
 
 	// Compute new dialog items (tail) and append.
@@ -406,13 +467,31 @@ async function upsertDocIncrementalUpdate(
 	}
 
 	// Refresh top-level doc attrs on the primary so search counters stay current.
+	// In partial mode we override message/tool counts with the running totals so
+	// the search facets reflect reality even if the tools section content is
+	// stale (its replacement is gated on full reads). buildSiyuanAttrs reads from
+	// session.messages.length etc, so we shim a clone for partial-mode hashes.
 	if (metaChange || dialogueChange) {
-		// Pass a fresh hash over the full doc structure approximation — used for
-		// `custom-ai-content-hash` only. We don't keep the full markdown around;
-		// the meta hash is a reasonable proxy.
+		const attrsSession =
+			isPartial
+				? ({
+						...session,
+						// Counts in attrs need to be totals; this only affects the count
+						// fields buildSiyuanAttrs derives — not the dialog content.
+						messages: new Array(totalMessageCount).fill({ role: "user", text: "", timestamp: "" }),
+						toolActivities: new Array(totalToolCount)
+							.fill(undefined)
+							.map((_, i) => ({
+								kind: "other" as const,
+								summary: "",
+								timestamp: "",
+								status: i < totalFailedToolCount ? ("failure" as const) : undefined,
+							})),
+				  } as NormalizedSession)
+				: session;
 		await deps.writer.setAttrs({
 			docId: primaryDocId,
-			attrs: buildSiyuanAttrs(session, { hash: meta.hash, title, titleSource, status }),
+			attrs: buildSiyuanAttrs(attrsSession, { hash: meta.hash, title, titleSource, status }),
 		});
 	}
 
@@ -420,15 +499,17 @@ async function upsertDocIncrementalUpdate(
 		...existing,
 		docId: activeDocId,
 		partDocIds: newPartDocIds,
-		appendedMessageCount: session.messages.length,
-		appendedToolCount: session.toolActivities.length,
+		appendedMessageCount: totalMessageCount,
+		appendedToolCount: totalToolCount,
 		appendedSubAgentCount: subs.length,
 		currentPartBytes: newCurrentPartBytes,
-		metaHash: meta.hash,
+		// metaHash only meaningful under full reads — keep stale in partial mode
+		// so a future full read can detect the divergence and force a re-render.
+		metaHash: isPartial ? existing.metaHash : meta.hash,
 		contentHash: meta.hash,
-		messageCount: session.messages.length,
-		toolCount: session.toolActivities.length,
-		failedToolCount: session.toolActivities.filter((t) => t.status === "failure").length,
+		messageCount: totalMessageCount,
+		toolCount: totalToolCount,
+		failedToolCount: totalFailedToolCount,
 		updatedAt: session.updatedAt,
 		title,
 		titleSource,
@@ -488,7 +569,7 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 	}
 
 	// 1. Parse changed files (cursor fast-path skips unchanged ones).
-	const entries: Array<{ file: DiscoveredFile; session: NormalizedSession }> = [];
+	const entries: Array<{ file: DiscoveredFile; session: NormalizedSession; isPartial: boolean }> = [];
 	for (const file of discovered) {
 		const stateKey = fileKey(file.source, file.path);
 		const cursor = state.files[stateKey];
@@ -505,11 +586,18 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 		) {
 			continue;
 		}
+		// Incremental-read eligibility: an existing main-session doc managed by
+		// the incremental writer + a non-zero byte cursor. Sub-agent attachments
+		// keep full reads because their writer overwrites the asset in place.
+		const fromOffset =
+			cached?.incrementalEnabled && cached.docId && cursor && cursor.offset > 0
+				? cursor.offset
+				: undefined;
 		try {
-			const content = await deps.files.read(file.path);
-			const session = parseFile(file, content);
+			const content = await deps.files.read(file.path, fromOffset);
+			const session = parseFile(file, content, cached ? extractPriorMeta(cached) : undefined);
 			if (!session.sessionId) continue;
-			entries.push({ file, session });
+			entries.push({ file, session, isPartial: fromOffset !== undefined });
 		} catch (err) {
 			result.errors.push(`failed to process ${file.path}: ${err}`);
 		}
@@ -520,7 +608,7 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 	// Upsert deepest-first (leaves before parents) so a node's in-run descendants
 	// are already in state when it renders its `## 子代理` links — handles chains
 	// A→B→C where B is both a child of A and a parent of C.
-	const inSet = new Map<string, { file: DiscoveredFile; session: NormalizedSession }>();
+	const inSet = new Map<string, { file: DiscoveredFile; session: NormalizedSession; isPartial: boolean }>();
 	for (const e of entries) inSet.set(sessionKey(e.session), e);
 	const depth = new Map<string, number>();
 	const depthOf = (key: string, seen: Set<string> = new Set()): number => {
@@ -544,7 +632,7 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 	const nowTs = deps.now ? deps.now() : Date.now();
 	let processed = 0;
 	let deferred = 0;
-	for (const { file, session } of ordered) {
+	for (const { file, session, isPartial } of ordered) {
 		const updated = Date.parse(session.updatedAt);
 		if (settleMs > 0 && !Number.isNaN(updated) && nowTs - updated < settleMs) {
 			deferred++;
@@ -553,9 +641,14 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 		try {
 			const childLinks = collectChildLinks(state, session.source, session.sessionId);
 			if (session.isSubAgent) {
+				// Sub-agent assets always do full overwrite, so they should never
+				// have been read incrementally. Defensive guard: if we get here with
+				// isPartial, the attachment write will be wrong — but the read-path
+				// fromOffset gate already prevents this case (only main sessions
+				// with docId + incrementalEnabled get partial reads).
 				await upsertAttachment(deps, state, session, file, result, childLinks);
 			} else {
-				await upsertDoc(deps, state, session, file, result, childLinks);
+				await upsertDoc(deps, state, session, file, result, childLinks, isPartial);
 			}
 		} catch (err) {
 			result.errors.push(`failed to upsert ${file.path}: ${err}`);

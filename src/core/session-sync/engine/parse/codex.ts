@@ -59,7 +59,25 @@ function isInjectedContextMessage(role: "user" | "assistant", text: string): boo
 	return /^<(turn_aborted|environment_context|user_instructions|subagent_notification)\b/.test(normalized);
 }
 
-export function parseCodexSession(content: string, _sourcePath?: string): NormalizedSession {
+/** Prior-meta carried from state so the parser can fill in fields a partial
+ *  (offset-based) slice may lack (no session_meta record at slice start, etc).
+ *  Only used by incremental reads — full reads ignore it. */
+export interface PriorSessionMeta {
+	sessionId?: string;
+	cwd?: string;
+	model?: string;
+	createdAt?: string;
+	parentSessionId?: string;
+	agentNickname?: string;
+	agentRole?: string;
+	isSubAgent?: boolean;
+}
+
+export function parseCodexSession(
+	content: string,
+	_sourcePath?: string,
+	prior?: PriorSessionMeta,
+): NormalizedSession {
 	const lines = content.split("\n").filter((l) => l.trim());
 
 	const records: RawRecord[] = [];
@@ -170,17 +188,30 @@ export function parseCodexSession(content: string, _sourcePath?: string): Normal
 
 	const messages = responseMessages.length > 0 ? responseMessages : fallbackMessages;
 
+	// Fill in anything the slice didn't carry from prior state — relevant for
+	// incremental reads where the session_meta record is upstream of the offset.
+	const mergedSessionId = sessionId || prior?.sessionId || "";
+	const mergedCwd = cwd || prior?.cwd;
+	const mergedModel = model || prior?.model;
+	const mergedCreatedAt = createdAt || prior?.createdAt || "";
+	const mergedParentSessionId = parentSessionId || prior?.parentSessionId;
+	const mergedAgentNickname = agentNickname || prior?.agentNickname;
+	const mergedAgentRole = agentRole || prior?.agentRole;
+	// Sub-agent classification is sticky once observed (the marker only appears
+	// in session_meta which a partial slice may lack).
+	const mergedIsSubAgent = isSubAgentMarker || (prior?.isSubAgent ?? false);
+
 	return {
 		source: "codex",
-		sessionId,
-		parentSessionId,
-		isSubAgent: isSubAgentMarker,
-		createdAt,
-		updatedAt,
-		cwd,
-		model,
-		agentNickname,
-		agentRole,
+		sessionId: mergedSessionId,
+		parentSessionId: mergedParentSessionId,
+		isSubAgent: mergedIsSubAgent,
+		createdAt: mergedCreatedAt,
+		updatedAt: updatedAt || mergedCreatedAt,
+		cwd: mergedCwd,
+		model: mergedModel,
+		agentNickname: mergedAgentNickname,
+		agentRole: mergedAgentRole,
 		messages,
 		toolActivities,
 		parseWarnings,

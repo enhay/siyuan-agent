@@ -108,6 +108,14 @@ export interface RenderOptions {
 	status?: string;
 	/** Sub-agent attachment links inlined into the conversation at trigger time. */
 	subAgents?: Array<SubAgentLink>;
+	/** Override the overview's total-message count — used by the incremental
+	 *  reconciler when feeding a partial session (delta only) so the counter
+	 *  shown reflects the full session, not just the new tail. */
+	totalMessageCount?: number;
+	/** Override total-tool count for the same reason as `totalMessageCount`. */
+	totalToolCount?: number;
+	/** Override total-failed-tool count for the overview row. */
+	totalFailedToolCount?: number;
 }
 
 export interface SubAgentLink {
@@ -172,7 +180,10 @@ function pushOverviewSection(
 	options: RenderOptions,
 	subs: SubAgentLink[],
 ): void {
-	const failed = session.toolActivities.filter((t) => t.status === "failure");
+	const messageCount = options.totalMessageCount ?? session.messages.length;
+	const toolCount = options.totalToolCount ?? session.toolActivities.length;
+	const failedCount =
+		options.totalFailedToolCount ?? session.toolActivities.filter((t) => t.status === "failure").length;
 	lines.push("## 📋 概览", "");
 	lines.push("| 字段 | 值 |", "|---|---|");
 	lines.push(`| 来源 | ${session.source} |`);
@@ -181,7 +192,7 @@ function pushOverviewSection(
 		lines.push(`| 角色 | ${session.agentRole ?? "sub-agent"}${session.agentNickname ? ` (${session.agentNickname})` : ""} |`);
 	lines.push(`| 状态 | ${options.status ?? "completed"} |`);
 	lines.push(`| 时间 | ${session.createdAt} → ${session.updatedAt} |`);
-	lines.push(`| 消息 / 工具 | ${session.messages.length} / ${session.toolActivities.length}（失败 ${failed.length}） |`);
+	lines.push(`| 消息 / 工具 | ${messageCount} / ${toolCount}（失败 ${failedCount}） |`);
 	if (subs.length > 0) {
 		const childTools = subs.reduce((n, s) => n + (s.toolCount ?? 0), 0);
 		const childFailed = subs.reduce((n, s) => n + (s.failedToolCount ?? 0), 0);

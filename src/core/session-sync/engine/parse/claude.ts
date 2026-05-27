@@ -151,7 +151,13 @@ function deriveSidechainFromPath(sourcePath?: string): { agentId?: string; paren
 	return { agentId: fileMatch?.[1], parent };
 }
 
-export function parseClaudeSession(content: string, sourcePath?: string): NormalizedSession {
+import type { PriorSessionMeta } from "./codex";
+
+export function parseClaudeSession(
+	content: string,
+	sourcePath?: string,
+	prior?: PriorSessionMeta,
+): NormalizedSession {
 	const lines = content.split("\n").filter((l) => l.trim());
 
 	const records: ClaudeRecord[] = [];
@@ -228,18 +234,26 @@ export function parseClaudeSession(content: string, sourcePath?: string): Normal
 		sessionId = m?.[1] ?? sourcePath ?? "";
 	}
 
+	// Fill in anything the slice didn't carry (incremental partial reads).
+	const mergedSessionId = sessionId || prior?.sessionId || "";
+	const mergedCwd = cwd || prior?.cwd;
+	const mergedModel = model || prior?.model;
+	const mergedCreatedAt = createdAt || prior?.createdAt || "";
+	const mergedParentSessionId = parentSessionId || prior?.parentSessionId;
+	const mergedIsSubAgent = isSidechain || (prior?.isSubAgent ?? false);
+
 	return {
 		source: "claude",
-		sessionId,
-		parentSessionId,
+		sessionId: mergedSessionId,
+		parentSessionId: mergedParentSessionId,
 		// Sidechain is Claude's authoritative sub-agent marker (file lives in a
 		// subagents/ dir with isSidechain + agentId).
-		isSubAgent: isSidechain,
-		agentId: isSidechain ? agentId : undefined,
-		createdAt,
-		updatedAt,
-		cwd,
-		model,
+		isSubAgent: mergedIsSubAgent,
+		agentId: mergedIsSubAgent ? agentId : undefined,
+		createdAt: mergedCreatedAt,
+		updatedAt: updatedAt || mergedCreatedAt,
+		cwd: mergedCwd,
+		model: mergedModel,
 		messages,
 		toolActivities,
 		parseWarnings,

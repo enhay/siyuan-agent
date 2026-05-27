@@ -118,10 +118,16 @@ function fileSource(files: Array<{ file: DiscoveredFile; content: string }>): Fi
 		async list() {
 			return files.map((f) => f.file);
 		},
-		async read(path: string) {
+		async read(path: string, fromOffset?: number) {
 			wrap.reads++;
 			const f = files.find((x) => x.file.path === path);
 			if (!f) throw new Error("not found");
+			if (fromOffset && fromOffset > 0) {
+				// Byte-slice via UTF-8 encoding so the cursor matches the byte sizes
+				// the real fs adapter reports.
+				const bytes = new TextEncoder().encode(f.content);
+				return new TextDecoder("utf-8").decode(bytes.subarray(fromOffset));
+			}
 			return f.content;
 		},
 		async probe() {
@@ -265,11 +271,16 @@ describe("reconcileOnce", () => {
 	it("incremental: a tick with no new content does nothing (no replace, no append)", async () => {
 		const writer = new FakeWriter();
 		const state = memState();
-		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 100, mtimeMs: 1000 }, content: codexContent("c1") }]), writer, state));
+		// sizeBytes must match the real UTF-8 byte length, since the offset cursor
+		// is byte-based; lying about size desyncs the incremental read window.
+		const content = codexContent("c1");
+		const realSize = new TextEncoder().encode(content).length;
+		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: realSize, mtimeMs: 1000 }, content }]), writer, state));
 		const beforeAppend = writer.calls.appendToSection;
 		const beforeReplace = writer.calls.replaceSection;
-		// Same file content, mtime moved — should be a true no-op for the writer.
-		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 200, mtimeMs: 2000 }, content: codexContent("c1") }]), writer, state));
+		// Same file content, mtime moved (but size unchanged) — fast-path skips.
+		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: realSize, mtimeMs: 2000 }, content }]), writer, state));
+		// mtime moved → reread, but delta at offset=size is empty → no write.
 		expect(writer.calls.appendToSection).toBe(beforeAppend);
 		expect(writer.calls.replaceSection).toBe(beforeReplace);
 	});
@@ -291,6 +302,38 @@ describe("reconcileOnce", () => {
 		const rec = (await state.load()).sessions["codex:c1"];
 		expect(rec.partDocIds).toHaveLength(2);
 		expect(rec.docId).toBe(rec.partDocIds?.[1]); // active = new part
+	});
+
+	it("incremental: partial read (offset > 0) parses only delta bytes and appends to dialog", async () => {
+		const writer = new FakeWriter();
+		const state = memState();
+		// First tick: file at size N1, content has one user msg.
+		const firstContent = codexContent("c1");
+		const firstSize = new TextEncoder().encode(firstContent).length;
+		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: firstSize, mtimeMs: 1000 }, content: firstContent }]), writer, state));
+		const appendsBefore = writer.calls.appendToSection;
+
+		// Second tick: file grew with a new agent message appended.
+		const grownContent = codexContent("c1", [{ timestamp: "2026-05-01T10:01:00Z", type: "event_msg", payload: { type: "agent_message", message: "the answer" } }]);
+		const grownSize = new TextEncoder().encode(grownContent).length;
+		expect(grownSize).toBeGreaterThan(firstSize);
+
+		const src = fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: grownSize, mtimeMs: 2000 }, content: grownContent }]);
+		await reconcileOnce(deps(src, writer, state));
+
+		// Exactly the delta bytes were read (we recorded `reads` per read call;
+		// since src.read was invoked once, the offset path was used).
+		expect(src.reads).toBe(1);
+		// Dialog appended (the new agent message).
+		expect(writer.calls.appendToSection).toBeGreaterThan(appendsBefore);
+
+		// State now records the cumulative total (not just the delta).
+		const rec = (await state.load()).sessions["codex:c1"];
+		expect(rec.appendedMessageCount).toBe(2); // 1 user + 1 agent
+		expect(rec.appendedToolCount).toBe(0);
+		// Cursor advanced to the full file size.
+		const cursor = (await state.load()).files["codex:/a/c1.jsonl"];
+		expect(cursor.offset).toBe(grownSize);
 	});
 
 	it("legacy doc (no incrementalEnabled in state) keeps overwrite behavior", async () => {
