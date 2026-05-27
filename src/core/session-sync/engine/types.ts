@@ -103,6 +103,13 @@ export interface SessionRecord {
 	 *  Compared against the part-size threshold to decide when to spill into a
 	 *  new part. */
 	currentPartBytes?: number;
+	/** How many sub-agent attachment links have already been inlined into the
+	 *  dialog timeline across all parts. Used to slice `childLinks` for tail
+	 *  rendering. */
+	appendedSubAgentCount?: number;
+	/** Hash over overview/summary/tools/warnings markdown — used to skip the
+	 *  replaceSection round-trip when nothing meta-side has changed. */
+	metaHash?: string;
 }
 
 export interface SyncState {

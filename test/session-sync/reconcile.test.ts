@@ -15,24 +15,49 @@ function codexContent(id: string, extra: unknown[] = []): string {
 }
 
 class FakeWriter implements SiyuanWriter {
-	docs = new Map<string, { markdown: string; attrs: Record<string, string>; title?: string; exists: boolean }>();
+	docs = new Map<
+		string,
+		{
+			markdown: string;
+			attrs: Record<string, string>;
+			title?: string;
+			exists: boolean;
+			/** Section-keyed markdown bodies, after incremental updates. */
+			sections: Partial<Record<string, string>>;
+			/** Dialog tail appends (concatenated in order). */
+			dialogAppended: string;
+		}
+	>();
 	byKey = new Map<string, string>();
-	calls = { create: 0, overwrite: 0, rename: 0, setAttrs: 0, move: 0 };
+	calls = {
+		create: 0,
+		overwrite: 0,
+		rename: 0,
+		setAttrs: 0,
+		move: 0,
+		tag: 0,
+		replaceSection: 0,
+		appendToSection: 0,
+	};
 	private seq = 0;
 	async createDoc({ markdown }: { notebook: string; path: string; markdown: string }) {
 		const id = `doc-${++this.seq}`;
-		this.docs.set(id, { markdown, attrs: {}, exists: true });
+		this.docs.set(id, { markdown, attrs: {}, exists: true, sections: {}, dialogAppended: "" });
 		this.calls.create++;
 		return { id };
 	}
 	async overwriteDoc({ docId, markdown }: { docId: string; markdown: string }) {
 		const d = this.docs.get(docId);
-		if (d) d.markdown = markdown;
+		if (d) {
+			d.markdown = markdown;
+			d.sections = {};
+			d.dialogAppended = "";
+		}
 		this.calls.overwrite++;
 	}
 	async setAttrs({ docId, attrs }: { docId: string; attrs: Record<string, string> }) {
 		const d = this.docs.get(docId);
-		if (d) d.attrs = attrs;
+		if (d) d.attrs = { ...d.attrs, ...attrs };
 		const key = attrs["custom-ai-session-key"];
 		if (key) this.byKey.set(key, docId);
 		this.calls.setAttrs++;
@@ -53,6 +78,25 @@ class FakeWriter implements SiyuanWriter {
 	}
 	async docExists(docId: string) {
 		return !!this.docs.get(docId)?.exists;
+	}
+	async tagSectionAnchors(_docId: string) {
+		this.calls.tag++;
+		return {};
+	}
+	async findSectionBlock(_docId: string, _kind: string) {
+		return undefined;
+	}
+	async replaceSection(docId: string, kind: string, markdown: string) {
+		const d = this.docs.get(docId);
+		if (d) d.sections[kind] = markdown;
+		this.calls.replaceSection++;
+		return { anchorId: undefined };
+	}
+	async appendToSection(docId: string, kind: string, markdown: string) {
+		const d = this.docs.get(docId);
+		if (d && kind === "dialog") d.dialogAppended += markdown + "\n";
+		this.calls.appendToSection++;
+		return { ids: [] };
 	}
 }
 
@@ -119,7 +163,7 @@ describe("reconcileOnce", () => {
 		expect(fs.reads).toBe(readsAfterFirst); // fast-path skipped the read
 	});
 
-	it("overwrites the same doc when content changes", async () => {
+	it("appends new dialog to the same doc when content changes (incremental)", async () => {
 		const writer = new FakeWriter();
 		const state = memState();
 		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 100, mtimeMs: 1000 }, content: codexContent("c1") }]), writer, state));
@@ -128,8 +172,10 @@ describe("reconcileOnce", () => {
 		]);
 		const r = await reconcileOnce(deps(changed, writer, state));
 		expect(r.newSessions).toBe(0);
-		expect(writer.calls.create).toBe(1);
-		expect(writer.calls.overwrite).toBe(1);
+		expect(r.updatedSessions).toBe(1);
+		expect(writer.calls.create).toBe(1); // still one doc — incremental path doesn't recreate
+		expect(writer.calls.overwrite).toBe(0); // legacy overwrite path NOT used for incremental sessions
+		expect(writer.calls.appendToSection).toBeGreaterThan(0); // new assistant turn appended to dialog
 	});
 
 	it("recovers an existing doc by session key when local state is lost", async () => {
@@ -158,22 +204,22 @@ describe("reconcileOnce", () => {
 		expect(writer.calls.create).toBe(1);
 	});
 
-	it("settle-gate: a re-activated session re-defers, then overwrites the same doc once re-settled", async () => {
+	it("settle-gate: a re-activated session re-defers, then appends to the same doc once re-settled", async () => {
 		const writer = new FakeWriter();
 		const state = memState();
 		const at = (size: number, content: string) => fileSource([{ file: { source: "codex" as const, path: "/a/c1.jsonl", sizeBytes: size, mtimeMs: size }, content }]);
 		// 1) settled → written once.
 		await reconcileOnce({ ...deps(at(100, codexContent("c1")), writer, state), now: () => Date.parse("2026-05-01T10:10:00Z"), settleMs: 5 * 60 * 1000 });
 		expect(writer.calls.create).toBe(1);
-		// 2) re-activated: file grows, last activity recent → deferred (no overwrite).
+		// 2) re-activated: file grows, last activity recent → deferred (no append yet).
 		const resumed = codexContent("c1", [{ timestamp: "2026-05-01T11:00:00Z", type: "event_msg", payload: { type: "agent_message", message: "more" } }]);
 		await reconcileOnce({ ...deps(at(300, resumed), writer, state), now: () => Date.parse("2026-05-01T11:02:00Z"), settleMs: 5 * 60 * 1000 });
 		expect(writer.calls.create).toBe(1); // still one doc
-		expect(writer.calls.overwrite).toBe(0); // deferred
-		// 3) re-settled → same doc overwritten once (no duplicate).
+		expect(writer.calls.appendToSection).toBe(0); // deferred
+		// 3) re-settled → same doc gets the new dialog appended (no duplicate doc).
 		await reconcileOnce({ ...deps(at(300, resumed), writer, state), now: () => Date.parse("2026-05-01T11:10:00Z"), settleMs: 5 * 60 * 1000 });
 		expect(writer.calls.create).toBe(1);
-		expect(writer.calls.overwrite).toBe(1);
+		expect(writer.calls.appendToSection).toBeGreaterThan(0);
 	});
 
 	it("recreates when the stored doc was deleted and no recovery match exists", async () => {
@@ -198,6 +244,81 @@ describe("reconcileOnce", () => {
 		// Renamed to the readable name (emoji + MM-DD + clean title), not the slug leaf.
 		const created = [...writer.docs.values()].find((d) => /^🧪\d\d-\d\d hello$/.test(d.title));
 		expect(created).toBeDefined();
+	});
+
+	it("incremental: new session records partDocIds + appended counts + metaHash", async () => {
+		const writer = new FakeWriter();
+		const state = memState();
+		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 100, mtimeMs: 1000 }, content: codexContent("c1") }]), writer, state));
+		const rec = (await state.load()).sessions["codex:c1"];
+		expect(rec.incrementalEnabled).toBe(true);
+		expect(rec.partDocIds).toHaveLength(1);
+		expect(rec.partDocIds?.[0]).toBe(rec.docId);
+		expect(rec.appendedMessageCount).toBeGreaterThan(0);
+		expect(rec.appendedToolCount).toBe(0);
+		expect(rec.metaHash).toMatch(/^sha256:/);
+		expect(rec.currentPartBytes).toBeGreaterThan(0);
+		// First write tags section anchors so future ticks can find them.
+		expect(writer.calls.tag).toBe(1);
+	});
+
+	it("incremental: a tick with no new content does nothing (no replace, no append)", async () => {
+		const writer = new FakeWriter();
+		const state = memState();
+		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 100, mtimeMs: 1000 }, content: codexContent("c1") }]), writer, state));
+		const beforeAppend = writer.calls.appendToSection;
+		const beforeReplace = writer.calls.replaceSection;
+		// Same file content, mtime moved — should be a true no-op for the writer.
+		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 200, mtimeMs: 2000 }, content: codexContent("c1") }]), writer, state));
+		expect(writer.calls.appendToSection).toBe(beforeAppend);
+		expect(writer.calls.replaceSection).toBe(beforeReplace);
+	});
+
+	it("incremental: spill creates a new part doc when active part exceeds partMaxBytes", async () => {
+		const writer = new FakeWriter();
+		const state = memState();
+		// First tick lays the doc down.
+		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 100, mtimeMs: 1000 }, content: codexContent("c1") }]), writer, state));
+		expect(writer.calls.create).toBe(1);
+		// Second tick with a new turn — set a tiny partMaxBytes so any growth triggers spill.
+		const grown = codexContent("c1", [{ timestamp: "2026-05-01T11:00:00Z", type: "event_msg", payload: { type: "agent_message", message: "additional response" } }]);
+		await reconcileOnce({
+			...deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 300, mtimeMs: 2000 }, content: grown }]), writer, state),
+			partMaxBytes: 100,
+		});
+		// Expect a 2nd doc was created (the spill new part).
+		expect(writer.calls.create).toBe(2);
+		const rec = (await state.load()).sessions["codex:c1"];
+		expect(rec.partDocIds).toHaveLength(2);
+		expect(rec.docId).toBe(rec.partDocIds?.[1]); // active = new part
+	});
+
+	it("legacy doc (no incrementalEnabled in state) keeps overwrite behavior", async () => {
+		const writer = new FakeWriter();
+		// Seed state as if produced by a pre-incremental build.
+		writer.docs.set("legacy-1", { markdown: "old", attrs: { "custom-ai-session-key": "codex:c1" }, exists: true, sections: {}, dialogAppended: "", title: "old title" });
+		writer.byKey.set("codex:c1", "legacy-1");
+		const state = memState({
+			files: {},
+			sessions: {
+				"codex:c1": {
+					target: "siyuan",
+					docId: "legacy-1",
+					contentHash: "sha256:stale", // forces a rewrite
+					sessionId: "c1",
+					source: "codex",
+					// No incrementalEnabled — this is the migration boundary.
+				},
+			},
+		});
+		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 100, mtimeMs: 1000 }, content: codexContent("c1") }]), writer, state));
+		// Legacy path: overwriteDoc, NO tagSectionAnchors / appendToSection / replaceSection.
+		expect(writer.calls.overwrite).toBe(1);
+		expect(writer.calls.tag).toBe(0);
+		expect(writer.calls.appendToSection).toBe(0);
+		expect(writer.calls.replaceSection).toBe(0);
+		// State stays on the legacy track.
+		expect((await state.load()).sessions["codex:c1"].incrementalEnabled).toBe(false);
 	});
 });
 

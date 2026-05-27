@@ -18,7 +18,7 @@
  *  backward-compat. Section-body and dialog-tail variants live below the composer
  *  so the incremental reconciler can update one section at a time. */
 
-import type { NormalizedSession, ToolActivity } from "./types";
+import type { ConversationMessage, NormalizedSession, ToolActivity } from "./types";
 import { projectSlug } from "./identity";
 
 /** Headings whose content starts with one of these are folded by the writer. */
@@ -362,4 +362,57 @@ export function renderDialogTail(
 	pushDialogItems(lines, items, prevRole);
 	while (lines.length && lines[lines.length - 1] === "") lines.pop();
 	return lines.join("\n");
+}
+
+// ── Incremental-build helpers (used by the reconciler's append path) ─────────
+
+/** Stable label base for a sub-agent entry — `<role> · <nickname>` or `<role>`. */
+function subLabelBase(s: Pick<SubAgentLink, "role" | "nickname">): string {
+	return s.nickname ? `${s.role ?? "agent"} · ${s.nickname}` : (s.role ?? "agent");
+}
+
+/** Pre-populate a per-base count map from sub-agent links already emitted into a
+ *  doc. Pass into `buildIncrementalDialogItems` so per-base numbering continues
+ *  across appends (e.g. the second `worker · Ada` after the first is `(2)`). */
+export function seedSubLabelCounts(alreadyEmittedSubs: SubAgentLink[]): Map<string, number> {
+	const counts = new Map<string, number>();
+	for (const s of alreadyEmittedSubs) {
+		const base = subLabelBase(s);
+		counts.set(base, (counts.get(base) ?? 0) + 1);
+	}
+	return counts;
+}
+
+/** Build dialog items from incremental slices — messages/tools/subs that are
+ *  *new since the last append*. Mirrors `buildDialogItems` but takes pre-sliced
+ *  inputs so the caller can render only the tail. `seenSubLabels` carries label
+ *  counts forward (mutated in place). */
+export function buildIncrementalDialogItems(
+	session: Pick<NormalizedSession, "source">,
+	newMessages: ConversationMessage[],
+	newTools: ToolActivity[],
+	newSubs: SubAgentLink[],
+	seenSubLabels: Map<string, number>,
+): DialogItem[] {
+	const items: DialogItem[] = [];
+	for (const m of newMessages) {
+		const text = cleanMessageText(m.text);
+		if (!text) continue;
+		items.push({ ts: m.timestamp ?? "", kind: "msg", role: m.role, text });
+	}
+	const otherTool = session.source === "codex" ? "claude" : "codex";
+	for (const t of newTools) {
+		if (t.kind !== "shell") continue;
+		const cmd = crossToolCmd(t.summary, otherTool);
+		if (cmd) items.push({ ts: t.timestamp ?? "", kind: "xtool", other: otherTool, cmd });
+	}
+	for (const s of newSubs) {
+		const base = subLabelBase(s);
+		const seen = (seenSubLabels.get(base) ?? 0) + 1;
+		seenSubLabels.set(base, seen);
+		const label = `${seen === 1 ? base : `${base} (${seen})`} — ${s.title}`;
+		items.push({ ts: s.createdAt ?? "", kind: "sub", assetPath: s.assetPath, label });
+	}
+	items.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+	return items;
 }

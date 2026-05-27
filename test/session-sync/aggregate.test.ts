@@ -48,6 +48,10 @@ class FakeWriter implements SiyuanWriter {
 	async docExists(id: string) {
 		return !!this.docs.get(id)?.exists;
 	}
+	async tagSectionAnchors() { return {}; }
+	async findSectionBlock() { return undefined; }
+	async replaceSection() { return { anchorId: undefined }; }
+	async appendToSection() { return { ids: [] }; }
 }
 
 function memState(initial?: SyncState): StateStore {

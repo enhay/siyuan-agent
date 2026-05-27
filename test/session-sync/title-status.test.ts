@@ -35,13 +35,17 @@ class FakeWriter implements SiyuanWriter {
 	private seq = 0;
 	async createDoc() { const id = `doc-${++this.seq}`; this.docs.set(id, { exists: true }); return { id }; }
 	async overwriteDoc() {}
-	async setAttrs({ docId, attrs }: { docId: string; attrs: Record<string, string> }) { const k = attrs["custom-ai-session-key"]; if (k) this.byKey.set(k, docId); }
+	async setAttrs({ docId: _docId, attrs }: { docId: string; attrs: Record<string, string> }) { const k = attrs["custom-ai-session-key"]; if (k) this.byKey.set(k, _docId); }
 	async renameDoc({ docId, title }: { docId: string; title: string }) { const d = this.docs.get(docId); if (d) d.title = title; }
 	async moveUnder() {}
 	async foldHeadings() {}
 	async putAsset() { return "assets/x.md"; }
 	async findDocBySessionKey(k: string) { const id = this.byKey.get(k); return id && this.docs.get(id)?.exists ? id : undefined; }
 	async docExists(id: string) { return !!this.docs.get(id)?.exists; }
+	async tagSectionAnchors() { return {}; }
+	async findSectionBlock() { return undefined; }
+	async replaceSection() { return { anchorId: undefined }; }
+	async appendToSection() { return { ids: [] }; }
 }
 function memState(initial?: SyncState): StateStore { let s = initial ?? { files: {}, sessions: {} }; return { async load() { return s; }, async save(n) { s = n; } }; }
 function fileSource(files: Array<{ file: DiscoveredFile; content: string }>): FileSource {
