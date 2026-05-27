@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { renderSession, cleanMessageText, FOLDABLE_HEADING_PREFIXES } from "../../src/core/session-sync/engine/render";
+import {
+	renderSession,
+	renderFullDoc,
+	renderOverviewBlock,
+	renderSummaryBlock,
+	renderDialogBlock,
+	renderDialogTail,
+	renderToolsBlock,
+	renderWarningsBlock,
+	cleanTurns,
+	buildDialogItems,
+	cleanMessageText,
+	FOLDABLE_HEADING_PREFIXES,
+	SECTION_KIND,
+} from "../../src/core/session-sync/engine/render";
 import type { NormalizedSession } from "../../src/core/session-sync/engine/types";
 
 function session(over: Partial<NormalizedSession> = {}): NormalizedSession {
@@ -154,6 +168,90 @@ describe("renderSession readability", () => {
 		expect(md).toContain("↗ **调用 claude**");
 		expect(md).toContain('claude -p "do the work"');
 		expect((md.match(/↗ \*\*调用/g) || []).length).toBe(1); // which/path noise excluded
+	});
+});
+
+describe("section / tail renderers (incremental)", () => {
+	it("renderFullDoc is the same function as renderSession (backward-compat alias)", () => {
+		expect(renderFullDoc).toBe(renderSession);
+	});
+
+	it("SECTION_KIND values match the attr namespace the reconciler will set", () => {
+		expect(SECTION_KIND.overview).toBe("overview");
+		expect(SECTION_KIND.summary).toBe("summary");
+		expect(SECTION_KIND.dialog).toBe("dialog");
+		expect(SECTION_KIND.tools).toBe("tools");
+		expect(SECTION_KIND.warnings).toBe("warnings");
+	});
+
+	it("renderOverviewBlock returns just the overview, no trailing blank", () => {
+		const md = renderOverviewBlock(session(), {}, []);
+		expect(md.startsWith("## 📋 概览")).toBe(true);
+		expect(md).toContain("| 来源 | codex |");
+		expect(md.endsWith("\n")).toBe(false); // trailing blank trimmed
+		expect(md).not.toContain("## 💬"); // doesn't bleed into next section
+	});
+
+	it("renderSummaryBlock returns the muted 问→答 callout (no heading)", () => {
+		const md = renderSummaryBlock(session(), cleanTurns(session()));
+		expect(md).toContain("> 🎯 **问** fix the login bug");
+		expect(md).toContain("> **答** Done.");
+		expect(md).not.toContain("##");
+	});
+
+	it("renderSummaryBlock returns '' for a session with no turns and no failures", () => {
+		const empty = session({ messages: [], toolActivities: [], parseWarnings: [] });
+		expect(renderSummaryBlock(empty, cleanTurns(empty))).toBe("");
+	});
+
+	it("renderToolsBlock returns '' when there are no tool activities", () => {
+		expect(renderToolsBlock(session())).toBe("");
+	});
+
+	it("renderWarningsBlock returns '' when there are no parse warnings", () => {
+		expect(renderWarningsBlock(session())).toBe("");
+	});
+
+	it("renderDialogBlock embeds the heading + content for the first emission", () => {
+		const s = session();
+		const items = buildDialogItems(s, cleanTurns(s), []);
+		const md = renderDialogBlock(items);
+		expect(md.startsWith("## 💬 对话")).toBe(true);
+		expect(md).toContain("> 🧑");
+		expect(md).toContain("> fix the login bug");
+	});
+
+	it("renderDialogTail returns '' for empty items", () => {
+		expect(renderDialogTail([], null)).toBe("");
+	});
+
+	it("renderDialogTail emits role banner when prevRole is null", () => {
+		const md = renderDialogTail(
+			[{ ts: "t", kind: "msg", role: "assistant", text: "Hi" }],
+			null,
+		);
+		expect(md).toContain("🤖");
+		expect(md).toContain("Hi");
+		// No heading (tail is body-only).
+		expect(md).not.toContain("## 💬");
+	});
+
+	it("renderDialogTail omits the role banner when prevRole already matches (continuation)", () => {
+		const md = renderDialogTail(
+			[{ ts: "t", kind: "msg", role: "assistant", text: "follow-up" }],
+			"assistant",
+		);
+		expect(md).not.toContain("🤖");
+		expect(md.trim()).toBe("follow-up");
+	});
+
+	it("renderDialogTail emits a new role banner when prevRole differs", () => {
+		const md = renderDialogTail(
+			[{ ts: "t", kind: "msg", role: "user", text: "next question" }],
+			"assistant",
+		);
+		expect(md).toContain("> 🧑");
+		expect(md).toContain("> next question");
 	});
 });
 
