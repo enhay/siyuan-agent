@@ -9,6 +9,7 @@
  *  (same-machine desktop / WSL / Docker / remote) — see `docs/session-sync-plan.md` §4. */
 
 import type { SessionSource, SyncState } from "./types";
+import type { SectionKind } from "./render";
 
 /** A discovered session log file on disk. */
 export interface DiscoveredFile {
@@ -49,6 +50,33 @@ export interface SiyuanWriter {
 	findDocBySessionKey(sessionKey: string): Promise<string | undefined>;
 	/** Whether a doc id still exists (user may have deleted it). */
 	docExists(docId: string): Promise<boolean>;
+
+	// ── Incremental-update API (Phase 2) ─────────────────────────────────────
+
+	/** Walk a freshly-created doc's top-level blocks, identify each section's
+	 *  anchor block (heading or summary callout) by content, and set
+	 *  `custom-section` attr so later updates can find it. Returns the discovered
+	 *  anchor id per section kind. Idempotent. */
+	tagSectionAnchors(docId: string): Promise<Partial<Record<SectionKind, string>>>;
+	/** Locate a single section's anchor by attr; undefined if not tagged. */
+	findSectionBlock(docId: string, kind: SectionKind): Promise<string | undefined>;
+	/** Replace a whole section (anchor block + body blocks until the next section
+	 *  anchor or doc end) with new markdown. The replacement's first block gets
+	 *  the `custom-section` attr. If `markdown` is empty the section is removed.
+	 *  Returns the new anchor id (or undefined when emptied). */
+	replaceSection(
+		docId: string,
+		kind: SectionKind,
+		markdown: string,
+	): Promise<{ anchorId: string | undefined }>;
+	/** Append blocks at the end of a section's body — just before the next
+	 *  section anchor, or at doc end if there's no next section. Returns ids of
+	 *  the newly inserted top-level blocks. */
+	appendToSection(
+		docId: string,
+		kind: SectionKind,
+		markdown: string,
+	): Promise<{ ids: string[] }>;
 }
 
 /** Loads and atomically saves sync state. */

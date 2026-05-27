@@ -6,6 +6,49 @@
 
 import { kernel as defaultKernel, sqlValue, type SiyuanKernel } from "../../tools/siyuan-kernel";
 import type { SiyuanWriter } from "../engine/ports";
+import { SECTION_ATTR_KEY, SECTION_KIND, type SectionKind } from "../engine/render";
+
+/** Fixed top-to-bottom order of sections in a session doc. Used when finding
+ *  the boundaries of a section to replace / append into. */
+const SECTION_ORDER: SectionKind[] = [
+	SECTION_KIND.overview,
+	SECTION_KIND.summary,
+	SECTION_KIND.dialog,
+	SECTION_KIND.tools,
+	SECTION_KIND.warnings,
+];
+
+/** Best-effort classification of a top-level block (by its first kramdown line)
+ *  to a section kind. Returns undefined for body blocks (table rows, items, etc).
+ *  Used only during `tagSectionAnchors` — once the attr is set, lookups go
+ *  through SQL on `custom-section`. */
+function classifyAnchor(firstLine: string, type: string | undefined): SectionKind | undefined {
+	if (type === "h") {
+		if (/^##\s*📋\s*概览/.test(firstLine)) return SECTION_KIND.overview;
+		if (/^##\s*💬\s*对话/.test(firstLine)) return SECTION_KIND.dialog;
+		if (/^##\s*🔧\s*工具调用/.test(firstLine)) return SECTION_KIND.tools;
+		if (/^##\s*⚠️\s*解析警告/.test(firstLine)) return SECTION_KIND.warnings;
+		return undefined;
+	}
+	if (type === "bq" && /🎯/.test(firstLine)) return SECTION_KIND.summary;
+	return undefined;
+}
+
+/** Extract block ids from a kernel insert/append/prepend result. The kernel
+ *  returns an operation transaction `[{ doOperations: [{id, …}, …], … }]`. */
+function extractInsertedBlockIds(result: unknown): string[] {
+	if (!Array.isArray(result)) return [];
+	const ids: string[] = [];
+	for (const item of result) {
+		const ops = Array.isArray((item as { doOperations?: unknown[] })?.doOperations)
+			? ((item as { doOperations: unknown[] }).doOperations as Array<{ id?: unknown }>)
+			: [];
+		for (const op of ops) {
+			if (typeof op?.id === "string" && op.id) ids.push(op.id);
+		}
+	}
+	return ids;
+}
 
 /** Escape a value for embedding inside a SQL `LIKE '…'` pattern.
  *
@@ -111,6 +154,183 @@ export function createSiyuanWriter(k: SiyuanKernel = defaultKernel, opts: Siyuan
 				`SELECT id FROM blocks WHERE id=${sqlValue(docId)} AND type='d' LIMIT 1`,
 			);
 			return rows.some((r) => typeof r.id === "string");
+		},
+
+		// ── Incremental section API (Phase 2) ────────────────────────────────
+
+		async tagSectionAnchors(docId) {
+			const children = ((await k.blocks.getChildren(docId)) ?? []) as Array<{
+				id?: string;
+				type?: string;
+			}>;
+			const candidateIds = children
+				.filter((c) => c?.type === "h" || c?.type === "bq")
+				.map((c) => c.id as string)
+				.filter(Boolean);
+			if (candidateIds.length === 0) return {};
+
+			const kramdowns = await k.blocks.getKramdowns(candidateIds);
+			const tagged: Partial<Record<SectionKind, string>> = {};
+			for (const child of children) {
+				const id = child?.id;
+				if (!id) continue;
+				const firstLine = (kramdowns[id] ?? "").split("\n", 1)[0] ?? "";
+				const kind = classifyAnchor(firstLine, child?.type);
+				if (!kind || tagged[kind]) continue;
+				tagged[kind] = id;
+				await k.attr.setBlockAttrs(id, { [SECTION_ATTR_KEY]: kind });
+			}
+			return tagged;
+		},
+
+		async findSectionBlock(docId, kind) {
+			// SiYuan's SQL parser PANICS on ESCAPE — see escapeIalLike. Safe here:
+			// section kinds are all simple lowercase strings, no LIKE metacharacters.
+			const rows = await k.sql<IdRow>(
+				`SELECT id FROM blocks WHERE root_id=${sqlValue(docId)} AND ial LIKE '%${SECTION_ATTR_KEY}="${kind}"%' LIMIT 1`,
+			);
+			return rows.find((r) => typeof r.id === "string")?.id;
+		},
+
+		async replaceSection(docId, kind, markdown) {
+			// Strategy: walk top-level blocks once, resolve every anchor by attr,
+			// figure out the deletion range (existing anchor → next anchor exclusive,
+			// or end of doc), delete that range, then insert new markdown at the
+			// preserved boundary. Tag the new anchor so subsequent ops can find it.
+			const children = ((await k.blocks.getChildren(docId)) ?? []) as Array<{ id?: string }>;
+			if (children.length === 0) return { anchorId: undefined };
+
+			// Anchor map: kind → { id, index } (sequential getBlockAttrs is fine —
+			// a doc has at most 5 anchors; this is cheaper than re-fetching kramdowns).
+			const anchorByKind = new Map<SectionKind, { id: string; index: number }>();
+			for (let i = 0; i < children.length; i++) {
+				const id = children[i]?.id;
+				if (!id) continue;
+				const attrs = await k.attr.getBlockAttrs(id);
+				const sec = attrs[SECTION_ATTR_KEY] as SectionKind | undefined;
+				if (sec && !anchorByKind.has(sec)) anchorByKind.set(sec, { id, index: i });
+			}
+
+			const kindOrderIdx = SECTION_ORDER.indexOf(kind);
+			const existing = anchorByKind.get(kind);
+
+			// Where does the section currently end (exclusive)?
+			let nextAnchorIdx = children.length;
+			for (let i = kindOrderIdx + 1; i < SECTION_ORDER.length; i++) {
+				const a = anchorByKind.get(SECTION_ORDER[i]);
+				if (a) {
+					nextAnchorIdx = a.index;
+					break;
+				}
+			}
+
+			// Pre-compute insertion boundary IDs before deletion shuffles children.
+			let previousID: string | undefined;
+			let nextID: string | undefined;
+			if (existing) {
+				if (existing.index > 0) previousID = children[existing.index - 1]?.id;
+				if (nextAnchorIdx < children.length) nextID = children[nextAnchorIdx]?.id;
+				// Delete the whole section (anchor + body until next anchor).
+				for (let i = existing.index; i < nextAnchorIdx; i++) {
+					const id = children[i]?.id;
+					if (id) await k.blocks.delete(id);
+				}
+			} else {
+				// New section: pick boundary just before the next existing anchor.
+				for (let i = kindOrderIdx + 1; i < SECTION_ORDER.length; i++) {
+					const a = anchorByKind.get(SECTION_ORDER[i]);
+					if (a) {
+						nextID = a.id;
+						break;
+					}
+				}
+				if (!nextID) {
+					// No next section either — sit just after the last existing prior section.
+					for (let i = kindOrderIdx - 1; i >= 0; i--) {
+						const a = anchorByKind.get(SECTION_ORDER[i]);
+						if (a) {
+							// last block of that section = block right before the next-of-that anchor,
+							// but easier: insert as append at doc end (sections are ordered, and
+							// nothing tagged sits after it).
+							previousID = children[children.length - 1]?.id;
+							break;
+						}
+					}
+				}
+			}
+
+			if (markdown.length === 0) {
+				// Section removed; nothing to insert.
+				return { anchorId: undefined };
+			}
+
+			let insertedIds: string[];
+			if (previousID) {
+				insertedIds = extractInsertedBlockIds(
+					await k.blocks.insert({ data: markdown, previousID }),
+				);
+			} else if (nextID) {
+				// Insert with nextID via the kernel's insertBlock — same API supports it.
+				insertedIds = extractInsertedBlockIds(
+					await k.blocks.insert({ data: markdown, nextID }),
+				);
+			} else {
+				// Empty doc-body fallback (no prior nor next anchor) — prepend.
+				insertedIds = extractInsertedBlockIds(
+					await k.blocks.prepend({ data: markdown, parentID: docId }),
+				);
+			}
+
+			const anchorId = insertedIds[0];
+			if (anchorId) await k.attr.setBlockAttrs(anchorId, { [SECTION_ATTR_KEY]: kind });
+			return { anchorId };
+		},
+
+		async appendToSection(docId, kind, markdown) {
+			if (markdown.length === 0) return { ids: [] };
+
+			// Find the section AND the next-section anchor; new blocks insert
+			// right before that next anchor (or at doc end if none).
+			const children = ((await k.blocks.getChildren(docId)) ?? []) as Array<{ id?: string }>;
+			const anchorByKind = new Map<SectionKind, { id: string; index: number }>();
+			for (let i = 0; i < children.length; i++) {
+				const id = children[i]?.id;
+				if (!id) continue;
+				const attrs = await k.attr.getBlockAttrs(id);
+				const sec = attrs[SECTION_ATTR_KEY] as SectionKind | undefined;
+				if (sec && !anchorByKind.has(sec)) anchorByKind.set(sec, { id, index: i });
+			}
+
+			const kindOrderIdx = SECTION_ORDER.indexOf(kind);
+			const existing = anchorByKind.get(kind);
+			if (!existing) {
+				// No anchor — caller should `replaceSection` first to materialize it.
+				return { ids: [] };
+			}
+
+			let nextAnchorIdx = children.length;
+			for (let i = kindOrderIdx + 1; i < SECTION_ORDER.length; i++) {
+				const a = anchorByKind.get(SECTION_ORDER[i]);
+				if (a) {
+					nextAnchorIdx = a.index;
+					break;
+				}
+			}
+
+			let insertedIds: string[];
+			if (nextAnchorIdx < children.length) {
+				// Insert before the next anchor (preserves section ordering).
+				const nextID = children[nextAnchorIdx]?.id as string;
+				insertedIds = extractInsertedBlockIds(
+					await k.blocks.insert({ data: markdown, nextID }),
+				);
+			} else {
+				// Last section — just append at doc end.
+				insertedIds = extractInsertedBlockIds(
+					await k.blocks.append({ data: markdown, parentID: docId }),
+				);
+			}
+			return { ids: insertedIds };
 		},
 	};
 }
