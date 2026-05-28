@@ -33,6 +33,7 @@ export default class SiYuanAgent extends Plugin {
 
 	private chatPanel: ChatPanel | null = null;
 	private dockElement: Element | null = null;
+	private dockResizeObserver: ResizeObserver | null = null;
 	private dockWidthTimer: ReturnType<typeof setTimeout> | null = null;
 	private pendingContexts: string[] = [];
 	private pendingDoc: { id: string; title: string } | null = null;
@@ -126,14 +127,36 @@ export default class SiYuanAgent extends Plugin {
 					this.chatPanel = null;
 				}
 				this.dockElement = dock.element;
-				// Make the dock content a flex column so the `.fn__flex-1` body fills
-				// SiYuan's already-definite dock height, giving .chat-panel(height:100%)
-				// a height to resolve against. (Don't force height:100% here — SiYuan
-				// sizes dock.element itself; overriding it can overshoot the visible
-				// area and clip the bottom of the scroll.)
+				// Layout history (the hard part): two SiYuan dock states have been
+				// observed in the wild.
+				//   - Parent container has a definite height: `height:100%` resolves
+				//     correctly and dock.element fills the visible area. (Without
+				//     `height:100%` the flex chain collapses and the composer floats
+				//     mid-panel — symptom of 535893f.)
+				//   - Parent container has `height:auto` plus a tall sibling chrome
+				//     (tab bar etc.): `height:100%` resolves against parent's full
+				//     content height and overshoots the visible viewport, clipping
+				//     the bottom of the scroll — symptom of c7eb25a.
+				// Neither pure-CSS rule handles both. Track the parent's measured
+				// height with ResizeObserver and pin dock.element to it explicitly —
+				// always exactly the parent's visible area, never collapse, never
+				// overshoot.
 				const dockEl = dock.element as HTMLElement;
 				dockEl.style.display = "flex";
 				dockEl.style.flexDirection = "column";
+				dockEl.style.minHeight = "0";
+				dockEl.style.overflow = "hidden";
+				const syncDockHeight = () => {
+					const parent = dockEl.parentElement;
+					if (!parent) return;
+					const h = parent.clientHeight;
+					if (h > 0) dockEl.style.height = `${h}px`;
+				};
+				syncDockHeight();
+				// Disconnect any prior observer (re-init paths can repeat init()).
+				if (this.dockResizeObserver) this.dockResizeObserver.disconnect();
+				this.dockResizeObserver = new ResizeObserver(syncDockHeight);
+				if (dockEl.parentElement) this.dockResizeObserver.observe(dockEl.parentElement);
 				dock.element.innerHTML = `<div class="toolbar toolbar--border toolbar--dark">
 					<svg class="toolbar__icon"><use xlink:href="#iconAgent"></use></svg>
 					<div class="toolbar__text">${DOCK_TITLE}</div>
@@ -154,6 +177,10 @@ export default class SiYuanAgent extends Plugin {
 				this.chatPanel?.destroy();
 				this.chatPanel = null;
 				this.dockElement = null;
+				if (this.dockResizeObserver) {
+					this.dockResizeObserver.disconnect();
+					this.dockResizeObserver = null;
+				}
 			},
 		});
 
@@ -237,6 +264,7 @@ export default class SiYuanAgent extends Plugin {
 
 	onunload() {
 		if (this.dockWidthTimer) { clearTimeout(this.dockWidthTimer); this.dockWidthTimer = null; }
+		if (this.dockResizeObserver) { this.dockResizeObserver.disconnect(); this.dockResizeObserver = null; }
 		this.scheduledTaskManager?.stop();
 		this.sessionSyncManager?.stop();
 		this.chatPanel?.destroy();
