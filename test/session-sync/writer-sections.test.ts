@@ -209,6 +209,47 @@ describe("siyuan-writer section API", () => {
 		expect(state.log.filter((l) => l.startsWith("insert"))).toHaveLength(0);
 	});
 
+	it("overwriteDoc loops getChildren until truly empty (defends against silent-fail delete race)", async () => {
+		// Simulate the wild bug: first getChildren returns 2 ids, but only one
+		// actually deletes (the other's id is silently a no-op — the kernel-side
+		// race we suspect). After the first pass, the second still appears in
+		// the next getChildren call. The fixed loop re-fetches and tries again.
+		const { kernel, state } = makeKernel([
+			{ id: "h1", type: "h", firstLine: "## 旧" },
+			{ id: "h2", type: "h", firstLine: "## 也旧" },
+		]);
+		const realDelete = kernel.blocks.delete;
+		let pass = 0;
+		kernel.blocks.delete = async (id: string) => {
+			pass++;
+			// First call (h1): silently no-op. Subsequent calls work normally.
+			if (pass === 1) return [];
+			return realDelete(id);
+		};
+		const writer = createSiyuanWriter(kernel);
+		await writer.overwriteDoc({ docId: "doc", markdown: "# 新内容" });
+
+		// After overwrite, doc should contain ONLY new content — old h1/h2 gone.
+		expect(state.children.map((c) => c.id)).not.toContain("h1");
+		expect(state.children.map((c) => c.id)).not.toContain("h2");
+		// New content was appended.
+		const log = state.log.filter((l) => l.startsWith("append"));
+		expect(log).toHaveLength(1);
+		expect(log[0]).toContain("新内容");
+	});
+
+	it("overwriteDoc bails out if children never clear (stops bloat at source)", async () => {
+		// Pathological: delete is a no-op for everyone. Old code would silently
+		// append on top; new code throws so the bug surfaces.
+		const { kernel } = makeKernel([
+			{ id: "a", type: "p", firstLine: "stuck-a" },
+			{ id: "b", type: "p", firstLine: "stuck-b" },
+		]);
+		kernel.blocks.delete = async () => []; // always no-op
+		const writer = createSiyuanWriter(kernel);
+		await expect(writer.overwriteDoc({ docId: "doc", markdown: "new" })).rejects.toThrow(/stuck/);
+	});
+
 	it("appendToSection without a tagged anchor is a no-op (returns empty ids)", async () => {
 		const { kernel } = makeKernel([{ id: "h1", type: "h", firstLine: "## 💬 对话" }]);
 		// Note: no attrs set — anchor not tagged yet.

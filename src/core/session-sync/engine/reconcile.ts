@@ -234,7 +234,7 @@ async function upsertDocLegacy(
 	const stateKey = fileKey(file.source, file.path);
 	const existing = state.sessions[key];
 	const now = deps.now ? deps.now() : Date.now();
-	const status = inferStatus(session, now);
+	const status = inferStatus(session, now, deps.settleMs ?? DEFAULT_SETTLE_MS);
 	const { title, titleSource } = await resolveTitle(deps, session, existing);
 	const markdown = renderFullDoc(session, { title, status, subAgents: childLinks.length > 0 ? childLinks : undefined });
 	const hash = await contentHash(markdown);
@@ -278,7 +278,7 @@ async function upsertDocCreate(
 	const key = sessionKey(session);
 	const stateKey = fileKey(file.source, file.path);
 	const now = deps.now ? deps.now() : Date.now();
-	const status = inferStatus(session, now);
+	const status = inferStatus(session, now, deps.settleMs ?? DEFAULT_SETTLE_MS);
 	const { title, titleSource } = await resolveTitle(deps, session, state.sessions[key]);
 	const subs = childLinks;
 	const fullMd = renderFullDoc(session, { title, status, subAgents: subs.length > 0 ? subs : undefined });
@@ -349,7 +349,7 @@ async function upsertDocIncrementalUpdate(
 	const stateKey = fileKey(file.source, file.path);
 	const existing = state.sessions[key]!;
 	const now = deps.now ? deps.now() : Date.now();
-	const status = inferStatus(session, now);
+	const status = inferStatus(session, now, deps.settleMs ?? DEFAULT_SETTLE_MS);
 	const { title, titleSource } = await resolveTitle(deps, session, existing);
 	const subs = childLinks;
 	const partDocIds = existing.partDocIds ?? (existing.docId ? [existing.docId] : []);
@@ -535,7 +535,7 @@ async function upsertAttachment(
 	const stateKey = fileKey(file.source, file.path);
 	const existing = state.sessions[key];
 	const now = deps.now ? deps.now() : Date.now();
-	const status = inferStatus(session, now);
+	const status = inferStatus(session, now, deps.settleMs ?? DEFAULT_SETTLE_MS);
 	const { title, titleSource } = await resolveTitle(deps, session, existing);
 	const markdown = renderFullDoc(session, { title, status, subAgents: childLinks.length > 0 ? childLinks : undefined });
 	const hash = await contentHash(markdown);

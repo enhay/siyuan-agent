@@ -112,9 +112,34 @@ export function createSiyuanWriter(k: SiyuanKernel = defaultKernel, opts: Siyuan
 		},
 
 		async overwriteDoc({ docId, markdown }) {
-			const children = await k.blocks.getChildren(docId);
-			for (const child of children ?? []) {
-				if (child?.id) await k.blocks.delete(child.id);
+			// The earlier "snapshot getChildren + serial delete + append" pattern
+			// produced bloat in the wild: one mastra session whose render is
+			// ~450 KB became a 47 MB .sy file (104× inflation). Likely cause: a
+			// stale snapshot from getChildren — by the time we run `delete(id)`
+			// SiYuan's background maintenance (heading fold rebalance, kramdown
+			// IAL reflow, …) may have changed the tree such that some ids no
+			// longer match a top-level child, the delete is a silent no-op, the
+			// block remains, and the subsequent `append` lands on top of the
+			// leftover — accumulating across every overwrite cycle.
+			//
+			// Fix: re-fetch getChildren after each pass and only stop when it's
+			// truly empty. Cap at 10 passes to avoid an infinite loop on the
+			// pathological case where SiYuan keeps re-creating children we just
+			// deleted (would surface as a thrown error so the bug is visible).
+			let lastCount = Infinity;
+			for (let pass = 0; pass < 10; pass++) {
+				const children = await k.blocks.getChildren(docId);
+				if (!children || children.length === 0) break;
+				if (children.length >= lastCount && pass > 0) {
+					// Not making progress — bail before we silently overwrite on top.
+					throw new Error(
+						`overwriteDoc: stuck clearing doc ${docId} (${children.length} children remain after pass ${pass})`,
+					);
+				}
+				lastCount = children.length;
+				for (const child of children) {
+					if (child?.id) await k.blocks.delete(child.id);
+				}
 			}
 			await k.blocks.append({ data: markdown, parentID: docId });
 		},

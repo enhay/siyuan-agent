@@ -11,7 +11,9 @@ function makeSession(over: Partial<NormalizedSession> = {}): NormalizedSession {
 describe("inferStatus", () => {
 	const now = Date.parse("2026-05-21T12:00:00Z");
 	it("active when updated within the window", () => {
-		expect(inferStatus(makeSession({ updatedAt: "2026-05-21T11:55:00Z" }), now)).toBe("active");
+		// Default window is 5min, aligned to the reconciler's settleMs. Updated
+		// 2min ago → clearly within.
+		expect(inferStatus(makeSession({ updatedAt: "2026-05-21T11:58:00Z" }), now)).toBe("active");
 	});
 	it("completed when updated long ago", () => {
 		expect(inferStatus(makeSession({ updatedAt: "2026-05-20T00:00:00Z" }), now)).toBe("completed");
