@@ -81,7 +81,9 @@ class FakeWriter implements SiyuanWriter {
 	}
 	async tagSectionAnchors(_docId: string) {
 		this.calls.tag++;
-		return {};
+		// Simulate a fully-tagged doc; reconcile uses this to decide whether the
+		// incremental path is safe. Returning {} would force the legacy fallback.
+		return { overview: "ov", summary: "sm", dialog: "dg", tools: "tl", warnings: "wn" };
 	}
 	async findSectionBlock(_docId: string, _kind: string) {
 		return undefined;
@@ -169,7 +171,11 @@ describe("reconcileOnce", () => {
 		expect(fs.reads).toBe(readsAfterFirst); // fast-path skipped the read
 	});
 
-	it("appends new dialog to the same doc when content changes (incremental)", async () => {
+	it("overwrites the same doc when content changes (full re-render)", async () => {
+		// The section-based incremental update path was retired (it produced
+		// replaceSection-induced data loss). Now every content change triggers
+		// a full re-render + overwriteDoc; the loop-clear in overwriteDoc
+		// guards against the historical accumulation bug.
 		const writer = new FakeWriter();
 		const state = memState();
 		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 100, mtimeMs: 1000 }, content: codexContent("c1") }]), writer, state));
@@ -179,9 +185,10 @@ describe("reconcileOnce", () => {
 		const r = await reconcileOnce(deps(changed, writer, state));
 		expect(r.newSessions).toBe(0);
 		expect(r.updatedSessions).toBe(1);
-		expect(writer.calls.create).toBe(1); // still one doc — incremental path doesn't recreate
-		expect(writer.calls.overwrite).toBe(0); // legacy overwrite path NOT used for incremental sessions
-		expect(writer.calls.appendToSection).toBeGreaterThan(0); // new assistant turn appended to dialog
+		expect(writer.calls.create).toBe(1); // still one doc
+		expect(writer.calls.overwrite).toBe(1); // re-rendered + overwritten
+		expect(writer.calls.appendToSection).toBe(0); // section ops retired
+		expect(writer.calls.replaceSection).toBe(0);
 	});
 
 	it("recovers an existing doc by session key when local state is lost", async () => {
@@ -210,22 +217,22 @@ describe("reconcileOnce", () => {
 		expect(writer.calls.create).toBe(1);
 	});
 
-	it("settle-gate: a re-activated session re-defers, then appends to the same doc once re-settled", async () => {
+	it("settle-gate: a re-activated session re-defers, then overwrites the same doc once re-settled", async () => {
 		const writer = new FakeWriter();
 		const state = memState();
 		const at = (size: number, content: string) => fileSource([{ file: { source: "codex" as const, path: "/a/c1.jsonl", sizeBytes: size, mtimeMs: size }, content }]);
 		// 1) settled → written once.
 		await reconcileOnce({ ...deps(at(100, codexContent("c1")), writer, state), now: () => Date.parse("2026-05-01T10:10:00Z"), settleMs: 5 * 60 * 1000 });
 		expect(writer.calls.create).toBe(1);
-		// 2) re-activated: file grows, last activity recent → deferred (no append yet).
+		// 2) re-activated: file grows, last activity recent → deferred (no overwrite yet).
 		const resumed = codexContent("c1", [{ timestamp: "2026-05-01T11:00:00Z", type: "event_msg", payload: { type: "agent_message", message: "more" } }]);
 		await reconcileOnce({ ...deps(at(300, resumed), writer, state), now: () => Date.parse("2026-05-01T11:02:00Z"), settleMs: 5 * 60 * 1000 });
 		expect(writer.calls.create).toBe(1); // still one doc
-		expect(writer.calls.appendToSection).toBe(0); // deferred
-		// 3) re-settled → same doc gets the new dialog appended (no duplicate doc).
+		expect(writer.calls.overwrite).toBe(0); // deferred
+		// 3) re-settled → same doc overwritten with full re-render (no duplicate doc).
 		await reconcileOnce({ ...deps(at(300, resumed), writer, state), now: () => Date.parse("2026-05-01T11:10:00Z"), settleMs: 5 * 60 * 1000 });
 		expect(writer.calls.create).toBe(1);
-		expect(writer.calls.appendToSection).toBeGreaterThan(0);
+		expect(writer.calls.overwrite).toBe(1);
 	});
 
 	it("recreates when the stored doc was deleted and no recovery match exists", async () => {
@@ -252,88 +259,62 @@ describe("reconcileOnce", () => {
 		expect(created).toBeDefined();
 	});
 
-	it("incremental: new session records partDocIds + appended counts + metaHash", async () => {
+	it("new session is created with incrementalEnabled=false (section path retired)", async () => {
 		const writer = new FakeWriter();
 		const state = memState();
 		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 100, mtimeMs: 1000 }, content: codexContent("c1") }]), writer, state));
 		const rec = (await state.load()).sessions["codex:c1"];
-		expect(rec.incrementalEnabled).toBe(true);
-		expect(rec.partDocIds).toHaveLength(1);
-		expect(rec.partDocIds?.[0]).toBe(rec.docId);
-		expect(rec.appendedMessageCount).toBeGreaterThan(0);
-		expect(rec.appendedToolCount).toBe(0);
-		expect(rec.metaHash).toMatch(/^sha256:/);
-		expect(rec.currentPartBytes).toBeGreaterThan(0);
-		// First write tags section anchors so future ticks can find them.
-		expect(writer.calls.tag).toBe(1);
+		// After retiring section-based incremental, incrementalEnabled stays false
+		// and we don't populate any of the now-unused incremental tracking fields.
+		expect(rec.incrementalEnabled).toBe(false);
+		expect(rec.contentHash).toMatch(/^sha256:/);
+		expect(writer.calls.create).toBe(1);
+		// Section ops are no longer called.
+		expect(writer.calls.tag).toBe(0);
+		expect(writer.calls.appendToSection).toBe(0);
+		expect(writer.calls.replaceSection).toBe(0);
 	});
 
-	it("incremental: a tick with no new content does nothing (no replace, no append)", async () => {
+	it("a tick with no new content skips the write (contentHash match)", async () => {
 		const writer = new FakeWriter();
 		const state = memState();
-		// sizeBytes must match the real UTF-8 byte length, since the offset cursor
-		// is byte-based; lying about size desyncs the incremental read window.
 		const content = codexContent("c1");
 		const realSize = new TextEncoder().encode(content).length;
 		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: realSize, mtimeMs: 1000 }, content }]), writer, state));
-		const beforeAppend = writer.calls.appendToSection;
-		const beforeReplace = writer.calls.replaceSection;
-		// Same file content, mtime moved (but size unchanged) — fast-path skips.
+		const overwritesBefore = writer.calls.overwrite;
+		// Same file content, mtime moved → reread, render hash matches, skip write.
 		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: realSize, mtimeMs: 2000 }, content }]), writer, state));
-		// mtime moved → reread, but delta at offset=size is empty → no write.
-		expect(writer.calls.appendToSection).toBe(beforeAppend);
-		expect(writer.calls.replaceSection).toBe(beforeReplace);
+		expect(writer.calls.overwrite).toBe(overwritesBefore);
 	});
 
-	it("incremental: spill creates a new part doc when active part exceeds partMaxBytes", async () => {
-		const writer = new FakeWriter();
+	it("partial section tagging falls back to non-incremental (avoids replaceSection data loss)", async () => {
+		// Historical: when section-based incremental was live, partial tagSectionAnchors
+		// caused replaceSection to delete content between the lone tagged anchor and
+		// end of doc. The section path has since been retired entirely, but the
+		// behavior remains: incrementalEnabled is always false.
+		class PartialTagWriter extends FakeWriter {
+			async tagSectionAnchors() {
+				this.calls.tag++;
+				// Only `tools` tagged — like the actual production failure mode.
+				return { tools: "h-tools" };
+			}
+		}
+		const writer = new PartialTagWriter();
 		const state = memState();
-		// First tick lays the doc down.
 		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 100, mtimeMs: 1000 }, content: codexContent("c1") }]), writer, state));
+		const rec = (await state.load()).sessions["codex:c1"];
+		// Fully-tagged check fails → mark as non-incremental → next tick uses overwrite.
+		expect(rec.incrementalEnabled).toBe(false);
+		// Doc still gets created (we don't refuse to write — just refuse to enter
+		// the destructive update path on subsequent ticks).
 		expect(writer.calls.create).toBe(1);
-		// Second tick with a new turn — set a tiny partMaxBytes so any growth triggers spill.
-		const grown = codexContent("c1", [{ timestamp: "2026-05-01T11:00:00Z", type: "event_msg", payload: { type: "agent_message", message: "additional response" } }]);
-		await reconcileOnce({
-			...deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 300, mtimeMs: 2000 }, content: grown }]), writer, state),
-			partMaxBytes: 100,
-		});
-		// Expect a 2nd doc was created (the spill new part).
-		expect(writer.calls.create).toBe(2);
-		const rec = (await state.load()).sessions["codex:c1"];
-		expect(rec.partDocIds).toHaveLength(2);
-		expect(rec.docId).toBe(rec.partDocIds?.[1]); // active = new part
-	});
-
-	it("incremental: partial read (offset > 0) parses only delta bytes and appends to dialog", async () => {
-		const writer = new FakeWriter();
-		const state = memState();
-		// First tick: file at size N1, content has one user msg.
-		const firstContent = codexContent("c1");
-		const firstSize = new TextEncoder().encode(firstContent).length;
-		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: firstSize, mtimeMs: 1000 }, content: firstContent }]), writer, state));
-		const appendsBefore = writer.calls.appendToSection;
-
-		// Second tick: file grew with a new agent message appended.
-		const grownContent = codexContent("c1", [{ timestamp: "2026-05-01T10:01:00Z", type: "event_msg", payload: { type: "agent_message", message: "the answer" } }]);
-		const grownSize = new TextEncoder().encode(grownContent).length;
-		expect(grownSize).toBeGreaterThan(firstSize);
-
-		const src = fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: grownSize, mtimeMs: 2000 }, content: grownContent }]);
-		await reconcileOnce(deps(src, writer, state));
-
-		// Exactly the delta bytes were read (we recorded `reads` per read call;
-		// since src.read was invoked once, the offset path was used).
-		expect(src.reads).toBe(1);
-		// Dialog appended (the new agent message).
-		expect(writer.calls.appendToSection).toBeGreaterThan(appendsBefore);
-
-		// State now records the cumulative total (not just the delta).
-		const rec = (await state.load()).sessions["codex:c1"];
-		expect(rec.appendedMessageCount).toBe(2); // 1 user + 1 agent
-		expect(rec.appendedToolCount).toBe(0);
-		// Cursor advanced to the full file size.
-		const cursor = (await state.load()).files["codex:/a/c1.jsonl"];
-		expect(cursor.offset).toBe(grownSize);
+		// Verify the safety: next tick on a content change goes through overwrite,
+		// NOT through replaceSection/appendToSection.
+		const changed = codexContent("c1", [{ timestamp: "2026-05-01T10:01:00Z", type: "event_msg", payload: { type: "agent_message", message: "done" } }]);
+		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 220, mtimeMs: 2000 }, content: changed }]), writer, state));
+		expect(writer.calls.overwrite).toBe(1); // legacy path used
+		expect(writer.calls.appendToSection).toBe(0); // no destructive section ops
+		expect(writer.calls.replaceSection).toBe(0);
 	});
 
 	it("legacy doc (no incrementalEnabled in state) keeps overwrite behavior", async () => {

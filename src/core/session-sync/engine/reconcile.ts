@@ -150,12 +150,14 @@ function toRecord(
 	};
 }
 
-/** Route a main-session upsert to the right path:
- *  - legacy (existing doc without `incrementalEnabled`): keep old overwrite
- *    behavior — per migration choice, legacy docs aren't migrated in place
- *  - existing incremental (active part still alive): incremental update
- *  - everything else (new + recovered + active-part deleted): create fresh
- *    incremental */
+/** Route a main-session upsert to the right path. After the C4 section-based
+ *  incremental architecture was retired (it produced replaceSection-induced
+ *  data loss in the wild — kernel block-tree race window made anchor tagging
+ *  unreliable), the routing collapsed to two cases:
+ *  - existing doc still alive → upsertDocLegacy (full re-render via overwriteDoc;
+ *    the loop-clear in overwriteDoc prevents the accumulation that originally
+ *    bloated docs 100×).
+ *  - everything else (new / recovery / doc deleted by user) → upsertDocCreate. */
 async function upsertDoc(
 	deps: ReconcileDeps,
 	state: SyncState,
@@ -163,65 +165,25 @@ async function upsertDoc(
 	file: DiscoveredFile,
 	result: ReconcileResult,
 	childLinks: ChildLink[],
-	isPartial: boolean,
+	_isPartial: boolean,
 ): Promise<void> {
 	const key = sessionKey(session);
 	const existing = state.sessions[key];
 
-	// Legacy session: still has a doc that was created under the old structure.
-	// Keep updating it via clear-children + append. No migration in place.
-	if (existing?.docId && !existing.incrementalEnabled && (await deps.writer.docExists(existing.docId))) {
+	if (existing?.docId && (await deps.writer.docExists(existing.docId))) {
 		return upsertDocLegacy(deps, state, session, file, result, childLinks);
 	}
-
-	// Existing incremental session — try to update the active part in place.
-	if (existing?.incrementalEnabled) {
-		const partDocIds = existing.partDocIds ?? (existing.docId ? [existing.docId] : []);
-		const activeDocId = partDocIds[partDocIds.length - 1];
-		if (activeDocId && (await deps.writer.docExists(activeDocId))) {
-			return upsertDocIncrementalUpdate(deps, state, session, file, result, childLinks, isPartial);
-		}
-		// Active part vanished (user deleted it). Drop the record + fall through to
-		// a fresh create. The findDocBySessionKey lookup inside upsertDocCreate
-		// will catch any surviving primary part for state-loss recovery.
-		delete state.sessions[key];
-	}
-
+	// Existing record but doc is gone (user deleted it / state drift).
+	if (existing) delete state.sessions[key];
 	return upsertDocCreate(deps, state, session, file, result, childLinks);
 }
 
-/** Bytes counted toward an incremental part's size budget. Approximate; only used
- *  to decide when to spill into a new part. */
-function approxByteLen(text: string): number {
-	return text.length;
-}
-
-/** Render the meta sections (overview/summary/tools/warnings) joined for hashing.
- *  We hash the join to know whether ANY of them changed across ticks — a cheap
- *  guard against gratuitous replaceSection calls when only the cursor moved. */
-async function computeMetaHash(
-	session: NormalizedSession,
-	options: {
-		title?: string;
-		status?: string;
-		subAgents: ChildLink[];
-		totalMessageCount?: number;
-		totalToolCount?: number;
-		totalFailedToolCount?: number;
-	},
-	turns: ReturnType<typeof cleanTurns>,
-): Promise<{ overviewMd: string; summaryMd: string; toolsMd: string; warningsMd: string; hash: string }> {
-	const overviewMd = renderOverviewBlock(session, options, options.subAgents);
-	const summaryMd = renderSummaryBlock(session, turns);
-	const toolsMd = renderToolsBlock(session);
-	const warningsMd = renderWarningsBlock(session);
-	const hash = await contentHash([overviewMd, summaryMd, toolsMd, warningsMd].join("\n\n"));
-	return { overviewMd, summaryMd, toolsMd, warningsMd, hash };
-}
-
-/** Legacy update path — clear children + append the full render. Used for docs
- *  created before the incremental writer landed; keeping them on this path means
- *  zero migration pain (per the user's C4 migration choice). */
+/** Update path — re-render the full session and overwriteDoc. Named "Legacy"
+ *  for historical reasons (was the only path before the C4 section-incremental
+ *  experiment, which was retired after producing replaceSection-induced data
+ *  loss); it is now the only update path. `overwriteDoc` loops getChildren +
+ *  delete until truly empty, guarding against the kernel-race that originally
+ *  accumulated content across overwrites. */
 async function upsertDocLegacy(
 	deps: ReconcileDeps,
 	state: SyncState,
@@ -265,8 +227,10 @@ async function upsertDocLegacy(
 }
 
 /** Create-fresh path for brand-new sessions (and state-loss recoveries where no
- *  doc was found in state but possibly exists in SiYuan). Always lays down the
- *  full incremental structure with section anchor attrs. */
+ *  doc was found in state but possibly exists in SiYuan). Lays down the full
+ *  rendered doc; subsequent ticks go through `upsertDocLegacy` which re-renders
+ *  full and overwriteDoc-replaces (the loop-clear in overwriteDoc protects
+ *  against the historical accumulation bug). */
 async function upsertDocCreate(
 	deps: ReconcileDeps,
 	state: SyncState,
@@ -285,8 +249,8 @@ async function upsertDocCreate(
 	const hash = await contentHash(fullMd);
 
 	// State-loss recovery: a doc with this session-key might exist from a prior
-	// run we lost state for. If so, overwrite it (treat as a fresh structure) so
-	// future ticks can find anchor blocks.
+	// run we lost state for. If so, overwriteDoc it (the loop-clear path is safe
+	// for arbitrary content). Otherwise create fresh.
 	let docId: string | undefined = await deps.writer.findDocBySessionKey(key);
 	if (docId && !(await deps.writer.docExists(docId))) docId = undefined;
 	let isNew = false;
@@ -302,225 +266,25 @@ async function upsertDocCreate(
 		isNew = true;
 	}
 
-	// Tag the section anchors so future ticks can do replaceSection / appendToSection.
-	await deps.writer.tagSectionAnchors(docId);
-
 	await deps.writer.renameDoc({ docId, title: buildDocName(session, title) });
 	await deps.writer.setAttrs({
 		docId,
-		attrs: { ...buildSiyuanAttrs(session, { hash, title, titleSource, status }), "custom-ai-part": "1" },
+		attrs: buildSiyuanAttrs(session, { hash, title, titleSource, status }),
 	});
 	await deps.writer.foldHeadings({ docId, headingPrefixes: FOLDABLE_HEADING_PREFIXES });
 
-	const turns = cleanTurns(session);
-	const { hash: metaHash } = await computeMetaHash(session, { title, status, subAgents: subs }, turns);
-
 	state.sessions[key] = {
 		...toRecord(session, { docId }, buildSiyuanDocPath(deps.rootPath, session), hash, title, titleSource, file.sizeBytes, now),
-		incrementalEnabled: true,
-		partDocIds: [docId],
-		appendedMessageCount: session.messages.length,
-		appendedToolCount: session.toolActivities.length,
-		appendedSubAgentCount: subs.length,
-		currentPartBytes: approxByteLen(fullMd),
-		metaHash,
+		// incrementalEnabled stays falsy — the section-based incremental path was
+		// retired (see upsertDoc router comment). All subsequent ticks go through
+		// the legacy overwrite path with loop-clear protection.
+		incrementalEnabled: false,
 	};
 
 	state.files[stateKey] = { offset: file.sizeBytes ?? 0, mtimeMs: file.mtimeMs, sessionKey: key };
 	if (isNew) result.newSessions++;
 	result.updatedSessions++;
 }
-
-/** Update an existing incremental session in place:
- *  - dialog: append-only tail to the active part (spill into a new part doc
- *    when the active part exceeds `partMaxBytes`)
- *  - overview / summary / tools / warnings: section-replace on the PRIMARY part
- *    (only when their joined hash actually moved — most ticks no-op those) */
-async function upsertDocIncrementalUpdate(
-	deps: ReconcileDeps,
-	state: SyncState,
-	session: NormalizedSession,
-	file: DiscoveredFile,
-	result: ReconcileResult,
-	childLinks: ChildLink[],
-	isPartial: boolean,
-): Promise<void> {
-	const key = sessionKey(session);
-	const stateKey = fileKey(file.source, file.path);
-	const existing = state.sessions[key]!;
-	const now = deps.now ? deps.now() : Date.now();
-	const status = inferStatus(session, now, deps.settleMs ?? DEFAULT_SETTLE_MS);
-	const { title, titleSource } = await resolveTitle(deps, session, existing);
-	const subs = childLinks;
-	const partDocIds = existing.partDocIds ?? (existing.docId ? [existing.docId] : []);
-	const primaryDocId = partDocIds[0];
-	let activeDocId = partDocIds[partDocIds.length - 1];
-
-	const appendedMsgs = existing.appendedMessageCount ?? 0;
-	const appendedTools = existing.appendedToolCount ?? 0;
-	const appendedSubs = existing.appendedSubAgentCount ?? 0;
-	// In partial-read mode the parser only saw the delta bytes, so `session.messages`
-	// IS the new tail already. In full-read mode it's the whole session and we
-	// have to slice by the prior count. Same for toolActivities. Sub-agent links
-	// come from in-memory state (not the read), so always slice them.
-	const newMessages = isPartial ? session.messages : session.messages.slice(appendedMsgs);
-	const newTools = isPartial ? session.toolActivities : session.toolActivities.slice(appendedTools);
-	const newSubs = subs.slice(appendedSubs);
-
-	// Total counts after this tick — used for overview rendering when partial
-	// reads can't trust `session.messages.length` directly.
-	const totalMessageCount = isPartial ? appendedMsgs + session.messages.length : session.messages.length;
-	const totalToolCount = isPartial ? appendedTools + session.toolActivities.length : session.toolActivities.length;
-	const totalFailedToolCount = isPartial
-		? (existing.failedToolCount ?? 0) + session.toolActivities.filter((t) => t.status === "failure").length
-		: session.toolActivities.filter((t) => t.status === "failure").length;
-
-	const dialogueChange = newMessages.length > 0 || newTools.length > 0 || newSubs.length > 0;
-
-	// Meta hash gate — saves O(1 SQL + 4 replaceSection) per tick on a session
-	// that hasn't visibly changed since last write. Only meaningful in full-read
-	// mode; in partial mode the meta sections (summary/tools/warnings) lack the
-	// full state needed to render them correctly, so we skip them entirely.
-	const turns = cleanTurns(session);
-	const meta = await computeMetaHash(
-		session,
-		{ title, status, subAgents: subs, totalMessageCount, totalToolCount, totalFailedToolCount },
-		turns,
-	);
-	const metaChange = !isPartial && meta.hash !== existing.metaHash;
-
-	if (!dialogueChange && !metaChange) {
-		state.files[stateKey] = { offset: file.sizeBytes ?? 0, mtimeMs: file.mtimeMs, sessionKey: key };
-		return;
-	}
-
-	// Meta sections live on the PRIMARY part (new spilled parts carry only a
-	// nav header + their own dialog section). Two modes:
-	// - Full read: replace all four sections when their joined hash moved.
-	// - Partial read: only refresh overview (counts move every tick), since the
-	//   delta-only `session.toolActivities` etc. would render an inaccurate
-	//   tools/summary/warnings section. Those stay frozen until a full re-read.
-	if (metaChange) {
-		await deps.writer.replaceSection(primaryDocId, "overview", meta.overviewMd);
-		await deps.writer.replaceSection(primaryDocId, "summary", meta.summaryMd);
-		await deps.writer.replaceSection(primaryDocId, "tools", meta.toolsMd);
-		await deps.writer.replaceSection(primaryDocId, "warnings", meta.warningsMd);
-	} else if (isPartial && dialogueChange) {
-		await deps.writer.replaceSection(primaryDocId, "overview", meta.overviewMd);
-	}
-
-	// Compute new dialog items (tail) and append.
-	const seenSubs = seedSubLabelCounts(subs.slice(0, appendedSubs));
-	const newItems = buildIncrementalDialogItems(session, newMessages, newTools, newSubs, seenSubs);
-	const tailMd = newItems.length > 0 ? renderDialogTail(newItems, null) : "";
-	const addBytes = approxByteLen(tailMd);
-
-	const partMaxBytes = deps.partMaxBytes ?? DEFAULT_PART_MAX_BYTES;
-	const currentBytes = existing.currentPartBytes ?? 0;
-	let newCurrentPartBytes = currentBytes;
-	let newPartDocIds = partDocIds;
-
-	if (tailMd.length > 0 && partMaxBytes > 0 && currentBytes + addBytes > partMaxBytes) {
-		// Spill into a new part doc. The new part is a self-contained continuation:
-		// nav header pointing back to the previous part + a fresh dialog section.
-		const newPartIdx = partDocIds.length + 1;
-		const previousTitle = buildDocName(session, title);
-		const newPartTitle = `${title} · 续 (${newPartIdx})`;
-		const newPartLabel = buildDocName(session, newPartTitle);
-		const scaffold = [
-			`> ← 上一卷 ((${activeDocId} "${previousTitle.replace(/"/g, "''")}"))`,
-			"",
-			"## 💬 对话",
-			"",
-			tailMd,
-		].join("\n");
-
-		const created = await deps.writer.createDoc({
-			notebook: deps.notebookId,
-			path: `${buildSiyuanDocPath(deps.rootPath, session)}-p${newPartIdx}`,
-			markdown: scaffold,
-		});
-		const newPartId = created.id;
-		await deps.writer.tagSectionAnchors(newPartId);
-		await deps.writer.renameDoc({ docId: newPartId, title: newPartLabel });
-		await deps.writer.setAttrs({
-			docId: newPartId,
-			attrs: {
-				"custom-ai-source": session.source,
-				"custom-ai-session-id": session.sessionId,
-				"custom-ai-session-key": key,
-				"custom-ai-part": String(newPartIdx),
-				"custom-ai-title": title,
-			},
-		});
-
-		// Footer on the old active part — link forward.
-		const footerMd = `> 续 → 下一卷 ((${newPartId} "${newPartLabel.replace(/"/g, "''")}"))`;
-		await deps.writer.appendToSection(activeDocId, "dialog", footerMd);
-
-		newPartDocIds = [...partDocIds, newPartId];
-		activeDocId = newPartId;
-		newCurrentPartBytes = approxByteLen(scaffold);
-	} else if (tailMd.length > 0) {
-		await deps.writer.appendToSection(activeDocId, "dialog", tailMd);
-		newCurrentPartBytes = currentBytes + addBytes;
-	}
-
-	// Refresh top-level doc attrs on the primary so search counters stay current.
-	// In partial mode we override message/tool counts with the running totals so
-	// the search facets reflect reality even if the tools section content is
-	// stale (its replacement is gated on full reads). buildSiyuanAttrs reads from
-	// session.messages.length etc, so we shim a clone for partial-mode hashes.
-	if (metaChange || dialogueChange) {
-		const attrsSession =
-			isPartial
-				? ({
-						...session,
-						// Counts in attrs need to be totals; this only affects the count
-						// fields buildSiyuanAttrs derives — not the dialog content.
-						messages: new Array(totalMessageCount).fill({ role: "user", text: "", timestamp: "" }),
-						toolActivities: new Array(totalToolCount)
-							.fill(undefined)
-							.map((_, i) => ({
-								kind: "other" as const,
-								summary: "",
-								timestamp: "",
-								status: i < totalFailedToolCount ? ("failure" as const) : undefined,
-							})),
-				  } as NormalizedSession)
-				: session;
-		await deps.writer.setAttrs({
-			docId: primaryDocId,
-			attrs: buildSiyuanAttrs(attrsSession, { hash: meta.hash, title, titleSource, status }),
-		});
-	}
-
-	state.sessions[key] = {
-		...existing,
-		docId: activeDocId,
-		partDocIds: newPartDocIds,
-		appendedMessageCount: totalMessageCount,
-		appendedToolCount: totalToolCount,
-		appendedSubAgentCount: subs.length,
-		currentPartBytes: newCurrentPartBytes,
-		// metaHash only meaningful under full reads — keep stale in partial mode
-		// so a future full read can detect the divergence and force a re-render.
-		metaHash: isPartial ? existing.metaHash : meta.hash,
-		contentHash: meta.hash,
-		messageCount: totalMessageCount,
-		toolCount: totalToolCount,
-		failedToolCount: totalFailedToolCount,
-		updatedAt: session.updatedAt,
-		title,
-		titleSource,
-		lastSourceOffset: file.sizeBytes,
-		lastWrittenAt: new Date(now).toISOString(),
-	};
-
-	state.files[stateKey] = { offset: file.sizeBytes ?? 0, mtimeMs: file.mtimeMs, sessionKey: key };
-	result.updatedSessions++;
-}
-
 /** Sub-agent session → a `.md` attachment under data/assets/ (not a document, not
  *  indexed). The parent links to it inline. Deterministic path → overwrite in place. */
 async function upsertAttachment(

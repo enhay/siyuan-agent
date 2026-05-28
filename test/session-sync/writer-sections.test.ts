@@ -87,7 +87,9 @@ describe("siyuan-writer section API", () => {
 		const { kernel, state } = makeKernel([
 			{ id: "h1", type: "h", firstLine: "## 📋 概览" },
 			{ id: "t1", type: "p", firstLine: "| field | value |" },
-			{ id: "bq1", type: "bq", firstLine: "> 🎯 **问** hello" },
+			// Live kernel returns "b" (not "bq") for blockquote — confirmed via direct
+			// /api/block/getChildBlocks probe. Use that here to catch the real format.
+			{ id: "bq1", type: "b", firstLine: "> 🎯 **问** hello" },
 			{ id: "h2", type: "h", firstLine: "## 💬 对话" },
 			{ id: "p1", type: "p", firstLine: "> 🧑" },
 			{ id: "h3", type: "h", firstLine: "## 🔧 工具调用 (3)" },

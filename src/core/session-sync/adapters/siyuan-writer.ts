@@ -21,7 +21,12 @@ const SECTION_ORDER: SectionKind[] = [
 /** Best-effort classification of a top-level block (by its first kramdown line)
  *  to a section kind. Returns undefined for body blocks (table rows, items, etc).
  *  Used only during `tagSectionAnchors` — once the attr is set, lookups go
- *  through SQL on `custom-section`. */
+ *  through SQL on `custom-section`.
+ *
+ *  Block type strings from kernel `getChildBlocks`: `h` for heading,
+ *  `b` for blockquote (NOT `bq` — seen in the wild). Earlier tests
+ *  mocked `"bq"` and that hid this discrepancy; the live mismatch caused
+ *  the summary callout to never be tagged. */
 function classifyAnchor(firstLine: string, type: string | undefined): SectionKind | undefined {
 	if (type === "h") {
 		if (/^##\s*📋\s*概览/.test(firstLine)) return SECTION_KIND.overview;
@@ -30,7 +35,9 @@ function classifyAnchor(firstLine: string, type: string | undefined): SectionKin
 		if (/^##\s*⚠️\s*解析警告/.test(firstLine)) return SECTION_KIND.warnings;
 		return undefined;
 	}
-	if (type === "bq" && /🎯/.test(firstLine)) return SECTION_KIND.summary;
+	// Blockquote kernel type literal is "b" (not "bq"). Match either to be
+	// defensive against kernel-version drift.
+	if ((type === "b" || type === "bq") && /🎯/.test(firstLine)) return SECTION_KIND.summary;
 	return undefined;
 }
 
@@ -184,26 +191,41 @@ export function createSiyuanWriter(k: SiyuanKernel = defaultKernel, opts: Siyuan
 		// ── Incremental section API (Phase 2) ────────────────────────────────
 
 		async tagSectionAnchors(docId) {
-			const children = ((await k.blocks.getChildren(docId)) ?? []) as Array<{
-				id?: string;
-				type?: string;
-			}>;
-			const candidateIds = children
-				.filter((c) => c?.type === "h" || c?.type === "bq")
-				.map((c) => c.id as string)
-				.filter(Boolean);
-			if (candidateIds.length === 0) return {};
-
-			const kramdowns = await k.blocks.getKramdowns(candidateIds);
+			// Right after createDocWithMd the kernel's block index may still be
+			// catching up; getKramdowns occasionally returns empty for newly-created
+			// blocks. Retry with backoff until we have all expected sections, or
+			// we exhaust attempts. (Production damage we hit before this guard:
+			// only `tools` got tagged in some docs because the other blocks'
+			// kramdowns came back empty, then later replaceSection calls deleted
+			// content between the lone tagged anchor and end of doc.)
 			const tagged: Partial<Record<SectionKind, string>> = {};
-			for (const child of children) {
-				const id = child?.id;
-				if (!id) continue;
-				const firstLine = (kramdowns[id] ?? "").split("\n", 1)[0] ?? "";
-				const kind = classifyAnchor(firstLine, child?.type);
-				if (!kind || tagged[kind]) continue;
-				tagged[kind] = id;
-				await k.attr.setBlockAttrs(id, { [SECTION_ATTR_KEY]: kind });
+			const delays = [0, 250, 750, 2000];
+			for (let pass = 0; pass < delays.length; pass++) {
+				if (delays[pass] > 0) await new Promise((r) => setTimeout(r, delays[pass]));
+				const children = ((await k.blocks.getChildren(docId)) ?? []) as Array<{
+					id?: string;
+					type?: string;
+				}>;
+				const candidateIds = children
+					.filter((c) => c?.type === "h" || c?.type === "b" || c?.type === "bq")
+					.map((c) => c.id as string)
+					.filter(Boolean);
+				if (candidateIds.length === 0) continue;
+
+				const kramdowns = await k.blocks.getKramdowns(candidateIds);
+				for (const child of children) {
+					const id = child?.id;
+					if (!id) continue;
+					const firstLine = (kramdowns[id] ?? "").split("\n", 1)[0] ?? "";
+					const kind = classifyAnchor(firstLine, child?.type);
+					if (!kind || tagged[kind]) continue;
+					tagged[kind] = id;
+					await k.attr.setBlockAttrs(id, { [SECTION_ATTR_KEY]: kind });
+				}
+				// We tag whatever's visible per pass. Dialog is the bare minimum
+				// we need for safe appendToSection — bail out early once it's there
+				// AND the headings we strictly require (overview) are also there.
+				if (tagged.overview && tagged.dialog) break;
 			}
 			return tagged;
 		},
