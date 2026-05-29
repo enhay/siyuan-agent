@@ -42,11 +42,13 @@ describe("renderSession readability", () => {
 
 	it("user turns are blockquotes (🧑), assistant turns are plain blocks (🤖)", () => {
 		const md = renderSession(session());
-		expect(md).toContain("> 🧑");
-		expect(md).toContain("> fix the login bug");
-		expect(md).toContain("🤖");
+		// Emoji is inlined with the first line of content (block-count reduction).
+		expect(md).toContain("> 🧑 fix the login bug");
 		expect(md).toContain("```js"); // assistant code renders natively (not quoted)
 		expect(md).not.toContain("> ```js");
+		// Assistant with code block: starts with text "Done." → inlined.
+		// (Pure code-block starts trigger the structural-prefix fallback to banner mode.)
+		expect(md).toMatch(/🤖 Done\./);
 	});
 
 	it("结论 is a muted 问→答 callout (blockquote, no heading)", () => {
@@ -91,9 +93,9 @@ describe("renderSession readability", () => {
 			}),
 		);
 		expect(md).not.toContain("system-reminder");
-		expect(md).toContain("> real question");
+		expect(md).toContain("> 🧑 real question");
 		// the reminder-only user turn is dropped, so only one 🧑 user block
-		expect(md.match(/^> 🧑$/gm)?.length).toBe(1);
+		expect(md.match(/^> 🧑 /gm)?.length).toBe(1);
 	});
 
 	it("strips <local-command-caveat> + <command-*> wrappers, keeps the real message", () => {
@@ -217,41 +219,50 @@ describe("section / tail renderers (incremental)", () => {
 		const items = buildDialogItems(s, cleanTurns(s), []);
 		const md = renderDialogBlock(items);
 		expect(md.startsWith("## 💬 对话")).toBe(true);
-		expect(md).toContain("> 🧑");
-		expect(md).toContain("> fix the login bug");
+		// Emoji inlined with first line of content (block-count reduction).
+		expect(md).toContain("> 🧑 fix the login bug");
 	});
 
 	it("renderDialogTail returns '' for empty items", () => {
 		expect(renderDialogTail([], null)).toBe("");
 	});
 
-	it("renderDialogTail emits role banner when prevRole is null", () => {
+	it("renderDialogTail inlines emoji with each assistant message", () => {
 		const md = renderDialogTail(
 			[{ ts: "t", kind: "msg", role: "assistant", text: "Hi" }],
 			null,
 		);
-		expect(md).toContain("🤖");
-		expect(md).toContain("Hi");
-		// No heading (tail is body-only).
+		expect(md.trim()).toBe("🤖 Hi");
 		expect(md).not.toContain("## 💬");
 	});
 
-	it("renderDialogTail omits the role banner when prevRole already matches (continuation)", () => {
+	it("renderDialogTail emits emoji on every turn (no banner continuation suppression)", () => {
+		// Inlining means each turn carries its own emoji — prevRole continuation
+		// suppression from the earlier "banner on its own line" layout no longer
+		// applies. This makes appends position-independent.
 		const md = renderDialogTail(
 			[{ ts: "t", kind: "msg", role: "assistant", text: "follow-up" }],
 			"assistant",
 		);
-		expect(md).not.toContain("🤖");
-		expect(md.trim()).toBe("follow-up");
+		expect(md.trim()).toBe("🤖 follow-up");
 	});
 
-	it("renderDialogTail emits a new role banner when prevRole differs", () => {
+	it("renderDialogTail user turn inlines emoji inside the blockquote", () => {
 		const md = renderDialogTail(
 			[{ ts: "t", kind: "msg", role: "user", text: "next question" }],
 			"assistant",
 		);
-		expect(md).toContain("> 🧑");
-		expect(md).toContain("> next question");
+		expect(md).toContain("> 🧑 next question");
+	});
+
+	it("renderDialogTail keeps emoji on its own line when assistant text starts with a code fence", () => {
+		// Inlining `🤖 \`\`\`js` would break the code fence (backticks no longer at
+		// start of line). Fall back to the banner layout in that case only.
+		const md = renderDialogTail(
+			[{ ts: "t", kind: "msg", role: "assistant", text: "```js\nok()\n```" }],
+			null,
+		);
+		expect(md).toContain("🤖\n\n```js");
 	});
 });
 
