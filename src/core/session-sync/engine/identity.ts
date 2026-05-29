@@ -104,11 +104,13 @@ export function firstSubstantiveUserMessage(session: NormalizedSession): string 
 }
 
 /** Deterministic title: first substantive user message, truncated; falls back to
- *  a project/source/id label. */
+ *  a clean "(无标题)" rather than a project/source/id slug. The slug form was
+ *  noisy in the doc tree ("X codex session 019d…") and only appeared on
+ *  near-empty sessions anyway — most of which the reconciler now skips. */
 export function inferTitle(session: NormalizedSession): string {
 	const msg = firstSubstantiveUserMessage(session);
 	if (msg) return msg.length <= 80 ? msg : `${msg.slice(0, 77)}...`;
-	return `${projectSlug(session.cwd)} ${session.source} session ${shortSessionId(session.sessionId)}`;
+	return "(无标题)";
 }
 
 /** Custom IAL attributes mirrored onto each generated doc. State-loss recovery

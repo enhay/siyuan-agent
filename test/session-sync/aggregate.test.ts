@@ -12,6 +12,8 @@ function codex(id: string, opts: { role?: string; nickname?: string; parent?: st
 	return [
 		{ timestamp: "2026-05-01T10:00:00Z", type: "session_meta", payload },
 		{ timestamp: "2026-05-01T10:00:05Z", type: "event_msg", payload: { type: "user_message", message: `task ${id}` } },
+		// 2nd message keeps the fixture above the trivial-session threshold.
+		{ timestamp: "2026-05-01T10:00:10Z", type: "event_msg", payload: { type: "agent_message", message: `working on ${id}` } },
 	]
 		.map((r) => JSON.stringify(r))
 		.join("\n");

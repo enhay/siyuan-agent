@@ -27,6 +27,8 @@ function codexContent(id: string, msg = "hello", extra: unknown[] = []): string 
 	return [
 		{ timestamp: "2026-05-01T10:00:00Z", type: "session_meta", payload: { id, cwd: "/x/proj", timestamp: "2026-05-01T10:00:00Z" } },
 		{ timestamp: "2026-05-01T10:00:05Z", type: "event_msg", payload: { type: "user_message", message: msg } },
+		// Non-trivial: 2 messages, survives the trivial-session skip in reconcile.
+		{ timestamp: "2026-05-01T10:00:10Z", type: "event_msg", payload: { type: "agent_message", message: "ok" } },
 		...extra,
 	].map((r) => JSON.stringify(r)).join("\n");
 }

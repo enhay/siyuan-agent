@@ -63,13 +63,15 @@ describe("identity helpers", () => {
 		expect(buildDocName(makeSession({ source: "claude" }), "调研")).toBe("🪻05-21 调研");
 	});
 
-	it("inferTitle truncates long first user message; falls back when none", () => {
+	it("inferTitle uses first user message; falls back to (无标题) when none", () => {
 		const withMsg = makeSession({
 			messages: [{ role: "user", text: "  hello   there  ", timestamp: "t" }],
 		});
 		expect(inferTitle(withMsg)).toBe("hello there");
+		// No substantive user message → clean "(无标题)" rather than the old
+		// "<proj> <source> session <id>" slug which was noisy in the doc tree.
 		const none = makeSession({ sessionId: "zzzz", cwd: "/x/proj" });
-		expect(inferTitle(none)).toBe("proj codex session zzzz");
+		expect(inferTitle(none)).toBe("(无标题)");
 	});
 
 	it("inferTitle strips a leading slash-command and skips bare slash commands", () => {

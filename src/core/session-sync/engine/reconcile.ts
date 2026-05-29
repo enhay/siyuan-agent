@@ -217,11 +217,16 @@ async function upsertDocLegacy(
 	await deps.writer.setAttrs({ docId, attrs: buildSiyuanAttrs(session, { hash, title, titleSource, status }) });
 	await deps.writer.foldHeadings({ docId, headingPrefixes: FOLDABLE_HEADING_PREFIXES });
 
-	state.sessions[key] = {
-		...toRecord(session, { docId }, buildSiyuanDocPath(deps.rootPath, session), hash, title, titleSource, file.sizeBytes, now),
-		// Carry forward any legacy fields we want to preserve.
-		incrementalEnabled: false,
-	};
+	state.sessions[key] = toRecord(
+		session,
+		{ docId },
+		buildSiyuanDocPath(deps.rootPath, session),
+		hash,
+		title,
+		titleSource,
+		file.sizeBytes,
+		now,
+	);
 	refreshCursor();
 	result.updatedSessions++;
 }
@@ -273,13 +278,16 @@ async function upsertDocCreate(
 	});
 	await deps.writer.foldHeadings({ docId, headingPrefixes: FOLDABLE_HEADING_PREFIXES });
 
-	state.sessions[key] = {
-		...toRecord(session, { docId }, buildSiyuanDocPath(deps.rootPath, session), hash, title, titleSource, file.sizeBytes, now),
-		// incrementalEnabled stays falsy — the section-based incremental path was
-		// retired (see upsertDoc router comment). All subsequent ticks go through
-		// the legacy overwrite path with loop-clear protection.
-		incrementalEnabled: false,
-	};
+	state.sessions[key] = toRecord(
+		session,
+		{ docId },
+		buildSiyuanDocPath(deps.rootPath, session),
+		hash,
+		title,
+		titleSource,
+		file.sizeBytes,
+		now,
+	);
 
 	state.files[stateKey] = { offset: file.sizeBytes ?? 0, mtimeMs: file.mtimeMs, sessionKey: key };
 	if (isNew) result.newSessions++;
@@ -350,18 +358,15 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 		) {
 			continue;
 		}
-		// Incremental-read eligibility: an existing main-session doc managed by
-		// the incremental writer + a non-zero byte cursor. Sub-agent attachments
-		// keep full reads because their writer overwrites the asset in place.
-		const fromOffset =
-			cached?.incrementalEnabled && cached.docId && cursor && cursor.offset > 0
-				? cursor.offset
-				: undefined;
+		// Full read every tick: the section-incremental path that consumed partial
+		// reads was retired (see upsertDoc router comment). The legacy overwrite
+		// path needs the whole session to render, so partial reads would mean an
+		// extra full re-read anyway.
 		try {
-			const content = await deps.files.read(file.path, fromOffset);
-			const session = parseFile(file, content, cached ? extractPriorMeta(cached) : undefined);
+			const content = await deps.files.read(file.path);
+			const session = parseFile(file, content);
 			if (!session.sessionId) continue;
-			entries.push({ file, session, isPartial: fromOffset !== undefined });
+			entries.push({ file, session, isPartial: false });
 		} catch (err) {
 			result.errors.push(`failed to process ${file.path}: ${err}`);
 		}
@@ -396,10 +401,30 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 	const nowTs = deps.now ? deps.now() : Date.now();
 	let processed = 0;
 	let deferred = 0;
+	let skippedTrivial = 0;
 	for (const { file, session, isPartial } of ordered) {
 		const updated = Date.parse(session.updatedAt);
 		if (settleMs > 0 && !Number.isNaN(updated) && nowTs - updated < settleMs) {
 			deferred++;
+			continue;
+		}
+		// Skip trivial sessions: opened a CLI, typed one tiny thing, exited. They
+		// produce a doc with a slug-fallback title and almost no content; ~6% of
+		// the backfill surface was this noise. The cursor still gets refreshed so
+		// we don't re-evaluate them every tick. Main sessions only — sub-agents
+		// always have parents that depend on them being indexed.
+		if (
+			!session.isSubAgent &&
+			session.messages.length <= 1 &&
+			session.toolActivities.length === 0
+		) {
+			skippedTrivial++;
+			const stateKey = fileKey(file.source, file.path);
+			state.files[stateKey] = {
+				offset: file.sizeBytes ?? 0,
+				mtimeMs: file.mtimeMs,
+				sessionKey: sessionKey(session),
+			};
 			continue;
 		}
 		try {
@@ -422,6 +447,7 @@ export async function reconcileOnce(deps: ReconcileDeps): Promise<ReconcileResul
 	}
 
 	if (deferred > 0) console.log(`[session-sync] deferred ${deferred} still-active session(s) (settle <${Math.round(settleMs / 60000)}min)`);
+	if (skippedTrivial > 0) console.log(`[session-sync] skipped ${skippedTrivial} trivial session(s) (≤1 message, no tools)`);
 	state.lastSyncAt = deps.now ? deps.now() : Date.now();
 	await deps.state.save(state);
 	return result;

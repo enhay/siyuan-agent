@@ -5,9 +5,13 @@ import type { SyncState } from "../../src/core/session-sync/engine/types";
 import { createFsSource, type FsPromisesLike } from "../../src/core/session-sync/adapters/fs-source";
 
 function codexContent(id: string, extra: unknown[] = []): string {
+	// Fixture is intentionally non-trivial (≥ 2 messages) so it survives the
+	// trivial-session skip in reconcile. Tests that want to exercise the skip
+	// pass a custom shape.
 	return [
 		{ timestamp: "2026-05-01T10:00:00Z", type: "session_meta", payload: { id, cwd: "/x/proj", model: "m", timestamp: "2026-05-01T10:00:00Z" } },
 		{ timestamp: "2026-05-01T10:00:05Z", type: "event_msg", payload: { type: "user_message", message: "hello" } },
+		{ timestamp: "2026-05-01T10:00:10Z", type: "event_msg", payload: { type: "agent_message", message: "hi back" } },
 		...extra,
 	]
 		.map((r) => JSON.stringify(r))
@@ -259,6 +263,25 @@ describe("reconcileOnce", () => {
 		expect(created).toBeDefined();
 	});
 
+	it("skips trivial sessions (≤1 message, no tools) — saves ~6% of real backfill noise", async () => {
+		// Real-data scan post-backfill found 54/850 docs (~6%) were sessions where
+		// someone opened a CLI, typed one thing, exited. They produce slug-fallback
+		// titles like "X codex session 019d…" and almost no content.
+		const writer = new FakeWriter();
+		const state = memState();
+		const trivial = [
+			{ timestamp: "2026-05-01T10:00:00Z", type: "session_meta", payload: { id: "trivial", cwd: "/x/proj", model: "m", timestamp: "2026-05-01T10:00:00Z" } },
+			{ timestamp: "2026-05-01T10:00:05Z", type: "event_msg", payload: { type: "user_message", message: "1" } },
+		].map((r) => JSON.stringify(r)).join("\n");
+		const r = await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/trivial.jsonl", sizeBytes: 100, mtimeMs: 1000 }, content: trivial }]), writer, state));
+		// No doc was created — the trivial session was filtered out before upsert.
+		expect(writer.calls.create).toBe(0);
+		expect(r.newSessions).toBe(0);
+		// Cursor still refreshed so we don't re-evaluate next tick.
+		const s = await state.load();
+		expect(s.files["codex:/a/trivial.jsonl"]?.offset).toBe(100);
+	});
+
 	it("new session is created with incrementalEnabled=false (section path retired)", async () => {
 		const writer = new FakeWriter();
 		const state = memState();
@@ -266,7 +289,7 @@ describe("reconcileOnce", () => {
 		const rec = (await state.load()).sessions["codex:c1"];
 		// After retiring section-based incremental, incrementalEnabled stays false
 		// and we don't populate any of the now-unused incremental tracking fields.
-		expect(rec.incrementalEnabled).toBe(false);
+		expect(rec.incrementalEnabled).toBeFalsy();
 		expect(rec.contentHash).toMatch(/^sha256:/);
 		expect(writer.calls.create).toBe(1);
 		// Section ops are no longer called.
@@ -304,7 +327,7 @@ describe("reconcileOnce", () => {
 		await reconcileOnce(deps(fileSource([{ file: { source: "codex", path: "/a/c1.jsonl", sizeBytes: 100, mtimeMs: 1000 }, content: codexContent("c1") }]), writer, state));
 		const rec = (await state.load()).sessions["codex:c1"];
 		// Fully-tagged check fails → mark as non-incremental → next tick uses overwrite.
-		expect(rec.incrementalEnabled).toBe(false);
+		expect(rec.incrementalEnabled).toBeFalsy();
 		// Doc still gets created (we don't refuse to write — just refuse to enter
 		// the destructive update path on subsequent ticks).
 		expect(writer.calls.create).toBe(1);
@@ -342,7 +365,7 @@ describe("reconcileOnce", () => {
 		expect(writer.calls.appendToSection).toBe(0);
 		expect(writer.calls.replaceSection).toBe(0);
 		// State stays on the legacy track.
-		expect((await state.load()).sessions["codex:c1"].incrementalEnabled).toBe(false);
+		expect((await state.load()).sessions["codex:c1"].incrementalEnabled).toBeFalsy();
 	});
 });
 
