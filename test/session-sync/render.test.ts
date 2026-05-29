@@ -40,15 +40,16 @@ describe("renderSession readability", () => {
 		expect(md).not.toMatch(/^# /m);
 	});
 
-	it("user turns are blockquotes (🧑), assistant turns are plain blocks (🤖)", () => {
+	it("user turns are blockquotes, assistant turns are plain blocks (no role emoji)", () => {
 		const md = renderSession(session());
-		// Emoji is inlined with the first line of content (block-count reduction).
-		expect(md).toContain("> 🧑 fix the login bug");
-		expect(md).toContain("```js"); // assistant code renders natively (not quoted)
+		// User content quoted; no 🧑 prefix — quoting signals "user" by itself.
+		expect(md).toContain("> fix the login bug");
+		expect(md).not.toContain("🧑");
+		// Assistant renders natively (not quoted); no 🤖 prefix.
+		expect(md).toContain("Done.");
+		expect(md).toContain("```js");
 		expect(md).not.toContain("> ```js");
-		// Assistant with code block: starts with text "Done." → inlined.
-		// (Pure code-block starts trigger the structural-prefix fallback to banner mode.)
-		expect(md).toMatch(/🤖 Done\./);
+		expect(md).not.toContain("🤖");
 	});
 
 	it("结论 is a muted 问→答 callout (blockquote, no heading)", () => {
@@ -93,9 +94,9 @@ describe("renderSession readability", () => {
 			}),
 		);
 		expect(md).not.toContain("system-reminder");
-		expect(md).toContain("> 🧑 real question");
-		// the reminder-only user turn is dropped, so only one 🧑 user block
-		expect(md.match(/^> 🧑 /gm)?.length).toBe(1);
+		expect(md).toContain("> real question");
+		// the reminder-only user turn is dropped, leaving exactly one user blockquote
+		expect(md.match(/^> real question/gm)?.length).toBe(1);
 	});
 
 	it("strips <local-command-caveat> + <command-*> wrappers, keeps the real message", () => {
@@ -219,50 +220,42 @@ describe("section / tail renderers (incremental)", () => {
 		const items = buildDialogItems(s, cleanTurns(s), []);
 		const md = renderDialogBlock(items);
 		expect(md.startsWith("## 💬 对话")).toBe(true);
-		// Emoji inlined with first line of content (block-count reduction).
-		expect(md).toContain("> 🧑 fix the login bug");
+		// No role emoji — blockquote alone identifies the user turn.
+		expect(md).toContain("> fix the login bug");
+		expect(md).not.toContain("🧑");
 	});
 
 	it("renderDialogTail returns '' for empty items", () => {
 		expect(renderDialogTail([], null)).toBe("");
 	});
 
-	it("renderDialogTail inlines emoji with each assistant message", () => {
+	it("renderDialogTail renders assistant content without a role prefix", () => {
 		const md = renderDialogTail(
 			[{ ts: "t", kind: "msg", role: "assistant", text: "Hi" }],
 			null,
 		);
-		expect(md.trim()).toBe("🤖 Hi");
+		expect(md.trim()).toBe("Hi");
+		expect(md).not.toContain("🤖");
 		expect(md).not.toContain("## 💬");
 	});
 
-	it("renderDialogTail emits emoji on every turn (no banner continuation suppression)", () => {
-		// Inlining means each turn carries its own emoji — prevRole continuation
-		// suppression from the earlier "banner on its own line" layout no longer
-		// applies. This makes appends position-independent.
-		const md = renderDialogTail(
-			[{ ts: "t", kind: "msg", role: "assistant", text: "follow-up" }],
-			"assistant",
-		);
-		expect(md.trim()).toBe("🤖 follow-up");
-	});
-
-	it("renderDialogTail user turn inlines emoji inside the blockquote", () => {
+	it("renderDialogTail user turn renders as a blockquote (no role prefix inside)", () => {
 		const md = renderDialogTail(
 			[{ ts: "t", kind: "msg", role: "user", text: "next question" }],
 			"assistant",
 		);
-		expect(md).toContain("> 🧑 next question");
+		expect(md).toContain("> next question");
+		expect(md).not.toContain("🧑");
 	});
 
-	it("renderDialogTail keeps emoji on its own line when assistant text starts with a code fence", () => {
-		// Inlining `🤖 \`\`\`js` would break the code fence (backticks no longer at
-		// start of line). Fall back to the banner layout in that case only.
+	it("renderDialogTail preserves code fences in assistant content (no inline prefix to break them)", () => {
 		const md = renderDialogTail(
 			[{ ts: "t", kind: "msg", role: "assistant", text: "```js\nok()\n```" }],
 			null,
 		);
-		expect(md).toContain("🤖\n\n```js");
+		// The fence sits at column 0 — no prefix mangles it.
+		expect(md).toContain("```js\nok()\n```");
+		expect(md).not.toContain("🤖");
 	});
 });
 

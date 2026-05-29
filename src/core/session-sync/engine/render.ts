@@ -224,30 +224,21 @@ function pushSummarySection(lines: string[], session: NormalizedSession, turns: 
 	}
 }
 
-/** Lines whose start would be reinterpreted as a markdown structural marker
- *  when the assistant emoji is prefixed inline (which lives outside any
- *  blockquote). Code fences, tables, headings, list markers, blockquote — any
- *  of these breaks if we put `🤖 ` before them on the same line. User turns
- *  are quoted so they're immune; assistant turns aren't. */
-const ASSISTANT_STRUCTURAL_PREFIX = /^(```|~~~|\||#{1,6}\s|[-*+]\s|\d+\.\s|>\s)/;
-
-/** Push dialog items into `lines`. Returns the trailing role marker so an
- *  incremental tail-append can decide whether to re-emit the role banner.
+/** Push dialog items into `lines`. The `initialPrevRole` arg is kept for
+ *  backward-compat with the older role-banner layout but is now ignored —
+ *  every turn renders independently.
  *
- *  Layout: role emoji is inlined with the first line of content (`> 🧑 ...`,
- *  `🤖 ...`) instead of sitting on its own line. For each turn this collapses
- *  what SiYuan parses as two child paragraphs into one — meaningful when a
- *  session has 1000+ turns (each saved NodeParagraph ≈ 150 bytes in .sy +
- *  one row in the kernel `blocks` table). Exception: assistant turns whose
- *  first line starts with a structural markdown prefix (code fence, table
- *  row, heading, list marker, blockquote) fall back to the banner layout —
- *  inlining `🤖 ` before those would break the markdown parse. */
+ *  Layout: user turns are blockquotes (`> ...`), assistant turns are plain
+ *  paragraphs. No role emoji or text label — the blockquote vs non-blockquote
+ *  distinction alone signals who said what. Cleanest and most compact:
+ *  saves one NodeParagraph per turn vs the emoji-on-own-line layout AND one
+ *  vs the emoji-inlined layout (no role prefix character either). */
 function pushDialogItems(
 	lines: string[],
 	items: DialogItem[],
-	initialPrevRole: "user" | "assistant" | null = null,
+	_initialPrevRole: "user" | "assistant" | null = null,
 ): { lastRole: "user" | "assistant" | null } {
-	let prevRole: "user" | "assistant" | null = initialPrevRole;
+	let prevRole: "user" | "assistant" | null = null;
 	for (const it of items) {
 		if (it.kind === "sub") {
 			const text = it.label.replace(/[\r\n]+/g, " ").replace(/[[\]]/g, "").trim();
@@ -260,27 +251,16 @@ function pushDialogItems(
 			prevRole = null;
 			continue;
 		}
-		const rawLines = it.text.split("\n");
-		const firstLine = rawLines[0] ?? "";
-		const restLines = rawLines.slice(1);
 		if (it.role === "user") {
-			// User content lives inside a `> ` blockquote — markdown structural
-			// markers inside a blockquote stay quoted text, so always safe to inline.
-			lines.push(`> 🧑 ${firstLine}`);
-			for (const line of restLines) lines.push(line ? `> ${line}` : ">");
+			// Each line quoted so a multi-line user message stays one blockquote
+			// block. Empty lines inside the message become `>` (blank quoted line)
+			// to keep the block coherent.
+			for (const line of it.text.split("\n")) lines.push(line ? `> ${line}` : ">");
 			lines.push("");
 		} else {
-			// Assistant content renders natively (not blockquoted). If the first
-			// line starts with a structural marker (code fence, table row, list…),
-			// inlining `🤖 ` before it would break that markdown. Fall back to the
-			// banner-on-its-own-line layout for that case only.
-			if (ASSISTANT_STRUCTURAL_PREFIX.test(firstLine)) {
-				lines.push("🤖", "", it.text, "");
-			} else {
-				lines.push(`🤖 ${firstLine}`);
-				for (const line of restLines) lines.push(line);
-				lines.push("");
-			}
+			// Assistant content renders natively — code fences, lists, tables
+			// all work. Nothing prefixed.
+			lines.push(it.text, "");
 		}
 		prevRole = it.role;
 	}
