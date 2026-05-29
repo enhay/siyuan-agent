@@ -72,12 +72,12 @@ export default class SiYuanAgent extends Plugin {
 			// to avoid a lost-update race with the settings save path.
 		});
 
-		this.addIcons(`<symbol id="iconAgent" viewBox="0 0 24 24">
-<rect width="24" height="24" rx="4" fill="#F2E6D8"/>
-<path d="M3 8Q8 5 12 8v12Q8 17 3 20Z" fill="#D96C4A"/>
-<path d="M21 8Q16 5 12 8v12q4-3 9 0Z" fill="#E89A6A"/>
-<rect x="11.4" y="8" width="1.2" height="12" rx=".6" fill="#C85A3A"/>
-<circle cx="12" cy="4.8" r="2.2" fill="#F4B942"/>
+		// Monochrome line-style icon to match SiYuan's toolbar idiom (sun / search /
+		// crown around us are all stroke-based, viewBox 0 0 24 24, currentColor).
+		// Glyph: chat bubble with a small tail + 4-point sparkle inside (AI chat).
+		this.addIcons(`<symbol id="iconAgent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+<path d="M5 6h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-6l-4 3v-3H5A1.5 1.5 0 0 1 3.5 15.5v-8A1.5 1.5 0 0 1 5 6Z"/>
+<path d="M12 8.7l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z" fill="currentColor" stroke="none"/>
 </symbol>`);
 
 		this.eventBus.on("open-menu-content", (e) => {
@@ -157,11 +157,11 @@ export default class SiYuanAgent extends Plugin {
 				if (this.dockResizeObserver) this.dockResizeObserver.disconnect();
 				this.dockResizeObserver = new ResizeObserver(syncDockHeight);
 				if (dockEl.parentElement) this.dockResizeObserver.observe(dockEl.parentElement);
-				dock.element.innerHTML = `<div class="toolbar toolbar--border toolbar--dark">
-					<svg class="toolbar__icon"><use xlink:href="#iconAgent"></use></svg>
-					<div class="toolbar__text">${DOCK_TITLE}</div>
-				</div>
-				<div class="fn__flex-1" style="overflow:hidden;min-height:0"></div>`;
+				// No inner "AI Agent" toolbar — the dock tab icon already identifies
+				// the panel, and the chat-panel's own session-bar (New Chat + view
+				// switcher) serves as the visible top. Saves ~40 px of vertical
+				// real estate; the panel reaches the top of the dock viewport.
+				dock.element.innerHTML = `<div class="fn__flex-1" style="overflow:hidden;min-height:0"></div>`;
 				this.chatPanel = new ChatPanel(
 					dock.element.querySelector<HTMLElement>(".fn__flex-1"),
 					this,
